@@ -1,6 +1,14 @@
 import { NarrativeScriptPanel } from "@/components/NarrativeScriptPanel";
 import { RunwayReelPreviewPanel } from "@/components/RunwayReelPreviewPanel";
-import type { GenerateScriptResponse, GenerateVideoResponse, RecommendOutfitResponse } from "@/types";
+import { apiPostJson } from "@/lib/api";
+import type {
+  GenerateScriptRequestBody,
+  GenerateScriptResponse,
+  GenerateVideoRequestBody,
+  GenerateVideoResponse,
+  PreviewReelCopyResponse,
+  RecommendOutfitResponse,
+} from "@/types";
 
 export function ContentPage({
   recommendation,
@@ -11,7 +19,8 @@ export function ContentPage({
   faceAnchorPath,
   onUploadFaceAnchor,
   onGenerateScript,
-  onGenerateVideo,
+  onRenderVideo,
+  stylePreference,
 }: {
   recommendation: RecommendOutfitResponse | null;
   script: GenerateScriptResponse | null;
@@ -20,10 +29,20 @@ export function ContentPage({
   videoBusy: boolean;
   faceAnchorPath: string | null;
   onUploadFaceAnchor: (file: File) => Promise<void>;
-  onGenerateScript: (platform: "linkedin" | "instagram" | "tiktok") => Promise<void>;
-  onGenerateVideo: () => Promise<void>;
+  onGenerateScript: (body: GenerateScriptRequestBody) => Promise<void>;
+  onRenderVideo: (body: GenerateVideoRequestBody) => Promise<void>;
+  stylePreference: string;
 }) {
   const hasOutfit = !!recommendation && recommendation.garments.length > 0;
+
+  const previewReel = async (body: {
+    scene_prompt: string;
+    anchor_image_paths: string[];
+    face_anchor_path: string | null;
+    duration_seconds: number;
+    face_anchor_present: boolean;
+  }) => apiPostJson<PreviewReelCopyResponse>("/preview-reel-copy", body);
+
   return (
     <div className="space-y-10">
       <section>
@@ -43,17 +62,19 @@ export function ContentPage({
           recommendation={recommendation}
           script={script}
           busy={scriptBusy}
+          stylePreference={stylePreference}
           onGenerate={onGenerateScript}
         />
         <RunwayReelPreviewPanel
+          recommendation={recommendation}
           video={video}
           busy={videoBusy}
           faceAnchorPath={faceAnchorPath}
           onUploadFaceAnchor={onUploadFaceAnchor}
-          onGenerate={onGenerateVideo}
+          onPreviewReelCopy={previewReel}
+          onRenderVideo={onRenderVideo}
         />
       </div>
     </div>
   );
 }
-

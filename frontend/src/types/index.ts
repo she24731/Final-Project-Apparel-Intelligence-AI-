@@ -46,7 +46,49 @@ export interface PurchaseAnalysisResponse {
 export interface GenerateScriptResponse {
   script: string;
   caption: string | null;
+  hashtags?: string[] | null;
   used_live_agent: boolean;
+}
+
+export interface GenerateScriptRequestBody {
+  platform: "linkedin" | "instagram" | "tiktok";
+  outfit_summary: string;
+  user_voice?: string | null;
+  tone?: string | null;
+  emotion?: string | null;
+  target_audience?: string | null;
+  scenario?: string | null;
+  vibe?: string | null;
+}
+
+export interface ReelSceneDraft {
+  anchor_image_path: string | null;
+  description: string;
+  narration: string;
+}
+
+export interface PreviewReelCopyResponse {
+  description: string;
+  narration_text: string;
+  video_prompt: string;
+  scenes: ReelSceneDraft[];
+}
+
+export interface GenerateVideoRequestBody {
+  scene_prompt: string;
+  anchor_image_paths: string[];
+  duration_seconds: number;
+  face_anchor_image_path: string | null;
+  narration_text: string | null;
+}
+
+export interface SocialPostPrepareResponse {
+  platform: string;
+  clipboard_text: string;
+  linkedin_share_url: string | null;
+  instagram_web_url: string;
+  tiktok_upload_url: string;
+  notes: string;
 }
 
 export interface GenerateVideoResponse {
@@ -58,6 +100,24 @@ export interface GenerateVideoResponse {
   description?: string | null;
   narration_text?: string | null;
   video_prompt?: string | null;
+}
+
+export interface AssistantTurnResponse {
+  reply: string;
+  actions: string[];
+  recommendation?: RecommendOutfitResponse | null;
+  script?: GenerateScriptResponse | null;
+  video?: GenerateVideoResponse | null;
+}
+
+export interface ChatContextPayload {
+  occasion: string;
+  weather: string;
+  vibe: string;
+  preference: string;
+  wardrobe_item_ids: string[];
+  outfit_summary: string | null;
+  face_anchor_path: string | null;
 }
 
 export interface ChatTurn {

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import re
+
 from app.schemas.media import GenerateVideoRequest, GenerateVideoResponse
 from app.schemas.recommend import RecommendOutfitResponse
+from app.schemas.reel_preview import ReelSceneDraft
 from app.config import get_settings
 
 
@@ -35,6 +38,64 @@ def build_storyboard(*, outfit: RecommendOutfitResponse | None, narrative: str, 
     if duration_seconds <= 4:
         scenes = scenes[:2]
     return Storyboard(logline=logline, scene_texts=scenes)
+
+
+def _split_narration_for_anchors(full: str, n: int) -> list[str]:
+    """Split narration into n chunks without empty strings."""
+    text = full.strip()
+    if n <= 1:
+        return [text]
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    if len(sentences) >= n:
+        # Bucket sentences evenly
+        buckets: list[list[str]] = [[] for _ in range(n)]
+        for i, s in enumerate(sentences):
+            buckets[i % n].append(s)
+        return [" ".join(b).strip() for b in buckets]
+    # Fallback: character slices
+    size = max(1, len(text) // n)
+    return [text[i * size : (i + 1) * size].strip() or text for i in range(n)]
+
+
+def build_anchor_scenes(
+    *,
+    anchor_paths: list[str],
+    scene_prompt: str,
+    narration: str,
+    face_anchor_path: str | None,
+) -> list[ReelSceneDraft]:
+    """
+    One editable block per anchor image (face first, then wardrobe product shots).
+    """
+    wardrobe_paths = [p for p in anchor_paths if p]
+    paths: list[str] = []
+    if face_anchor_path:
+        paths.append(face_anchor_path)
+    for p in wardrobe_paths:
+        if p not in paths:
+            paths.append(p)
+
+    if not paths:
+        return [
+            ReelSceneDraft(
+                anchor_image_path=None,
+                description=scene_prompt[:280],
+                narration=narration,
+            ),
+        ]
+
+    narr_parts = _split_narration_for_anchors(narration, len(paths))
+    scenes: list[ReelSceneDraft] = []
+    for i, p in enumerate(paths):
+        label = p.split("/")[-1]
+        scenes.append(
+            ReelSceneDraft(
+                anchor_image_path=p,
+                description=f"Scene {i + 1} — highlight {label}: {scene_prompt[:120].strip()}",
+                narration=narr_parts[i] if i < len(narr_parts) else narration,
+            ),
+        )
+    return scenes
 
 
 def build_media_prompts(*, outfit: RecommendOutfitResponse | None, narrative: str, duration_seconds: int) -> MediaPrompts:

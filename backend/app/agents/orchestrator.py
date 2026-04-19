@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -223,47 +224,157 @@ async def analyze_purchase_with_optional_agent(
         return det
 
 
-def _narrative_offline(platform: str, outfit_summary: str, user_voice: str | None) -> GenerateScriptResponse:
-    voice = user_voice or "confident and concise"
+def _narrative_offline(
+    platform: str,
+    outfit_summary: str,
+    user_voice: str | None,
+    *,
+    tone: str | None = None,
+    emotion: str | None = None,
+    target_audience: str | None = None,
+    scenario: str | None = None,
+    vibe: str | None = None,
+) -> GenerateScriptResponse:
+    voice = user_voice or "sound like a real person, not a press release"
+    t = tone or "authentic"
+    em = emotion or "calm confidence"
+    aud = target_audience or "people who care about craft and fit"
+    scen = scenario or "a normal day when you still want to feel put-together"
+    vb = vibe or "quiet quality"
+    h = int(hashlib.sha256(f"{platform}:{outfit_summary}:{voice}:{t}".encode()).hexdigest(), 16)
+    variant = h % 3
+
     if platform == "linkedin":
-        script = (
-            f"Hi — I am dialing up my presence for client-facing days. "
-            f"Today's look is intentional: {outfit_summary}. "
-            f"It reads polished without feeling stiff, which matches how I want collaborators to feel working with me."
+        hooks = (
+            (
+                f"If we meet on Zoom or in a room, I want the first signal to be judgment and taste—not noise. "
+                f"Today I’m wearing {outfit_summary}. It’s {t}, aimed at {aud}, in a {vb} register."
+            ),
+            (
+                f"Quick leadership frame: I’m not dressing for performance art; I’m dressing for decisions. "
+                f"This combo—{outfit_summary}—keeps me {em} while staying appropriate for {scen}."
+            ),
+            (
+                f"I’ve been thinking about presence as a form of respect. "
+                f"This outfit ({outfit_summary}) is my version of showing up: {t}, {em}, built for {aud}."
+            ),
         )
-        cap = None
-    elif platform == "dating":
-        script = (
-            f"If we meet, you'll probably notice this first: {outfit_summary}. "
-            f"I like when style feels honest—{voice}—and comfortable enough to wander a city after dinner."
+        script = hooks[variant]
+        cap = f"Fit note — {vb}: intention over flex."
+        return GenerateScriptResponse(script=script, caption=cap, hashtags=None, used_live_agent=False)
+
+    if platform == "instagram":
+        hooks = (
+            (
+                f"Okay—fit check, but make it human.\n"
+                f"The pieces: {outfit_summary}.\n"
+                f"The vibe: {vb}. The feeling I want: {em}.\n"
+                f"Scenario: {scen}. Talking to: {aud}.\n"
+                f"Three seconds: silhouette. Six seconds: texture. Finish on the shoes—promise."
+            ),
+            (
+                f"Camera roll energy, not a catalog.\n"
+                f"{outfit_summary} — styled for {scen}, with a {t} tone.\n"
+                f"I’m going for {em} because that’s what I want people to feel when they scroll past."
+            ),
+            (
+                f"This is the ‘I actually got dressed’ version of me.\n"
+                f"{outfit_summary}. {vb} palette, {t} delivery.\n"
+                f"If you’re {aud}, tell me what you’d tweak—lace swap? layer? I’m listening."
+            ),
         )
-        cap = "Low-key confident energy. Good food > loud clubs."
-    else:
-        script = (
-            f"Outfit check: {outfit_summary}. "
-            f"Three beats: clean silhouette, one texture pop, shoes that can keep up. {voice}."
-        )
-        cap = "Fit recap — steal the formula, not the flex."
-    return GenerateScriptResponse(script=script, caption=cap, used_live_agent=False)
+        script = hooks[variant]
+        cap = f"{vb} / {t} — saved you the Pinterest board."
+        tags = ["#ootd", "#quietluxury", "#fitcheck", "#menswear", "#styletips", "#wardrobe"]
+        return GenerateScriptResponse(script=script, caption=cap, hashtags=tags, used_live_agent=False)
+
+    # tiktok
+    hooks = (
+        (
+            f"POV: you’re not trying to go viral—you’re trying to look like you mean it.\n"
+            f"Fit: {outfit_summary}.\n"
+            f"Set the tone: {t}. Emotion: {em}. Audience: {aud}.\n"
+            f"Scenario: {scen}. Keep it tight—hook, prove it, out."
+        ),
+        (
+            f"Stop scrolling—three beats.\n"
+            f"One: {outfit_summary}.\n"
+            f"Two: the vibe is {vb}.\n"
+            f"Three: I’m speaking to {aud} with {t} energy—{em}.\n"
+            f"That’s the whole thesis."
+        ),
+        (
+            f"Real talk: clothes are a shortcut to credibility.\n"
+            f"Today: {outfit_summary}.\n"
+            f"I’m in {scen}, aiming at {aud}, channeling {em}.\n"
+            f"If it feels relatable, duet me with your swap."
+        ),
+    )
+    script = hooks[variant]
+    cap = "Fit thesis in 20s — steal the structure."
+    tags = ["#fitok", "#fitcheck", "#styletips", "#outfitideas", "#OOTD", "#fashiontiktok", "#wardrobe"]
+    return GenerateScriptResponse(script=script, caption=cap, hashtags=tags, used_live_agent=False)
 
 
 async def generate_script_with_optional_agent(
     platform: str,
     outfit_summary: str,
     user_voice: str | None,
+    *,
+    tone: str | None = None,
+    emotion: str | None = None,
+    target_audience: str | None = None,
+    scenario: str | None = None,
+    vibe: str | None = None,
 ) -> GenerateScriptResponse:
     settings = get_settings()
     if not settings.has_live_llm:
-        return _narrative_offline(platform, outfit_summary, user_voice)
+        return _narrative_offline(
+            platform,
+            outfit_summary,
+            user_voice,
+            tone=tone,
+            emotion=emotion,
+            target_audience=target_audience,
+            scenario=scenario,
+            vibe=vibe,
+        )
     try:
         agent = narrative_agent()
-        deps = NarrativeDeps(platform=platform, outfit_summary=outfit_summary, user_voice=user_voice)
-        prompt = f"platform={platform}\noutfit_summary={outfit_summary}\nuser_voice={user_voice!s}"
+        deps = NarrativeDeps(
+            platform=platform,
+            outfit_summary=outfit_summary,
+            user_voice=user_voice,
+            tone=tone,
+            emotion=emotion,
+            target_audience=target_audience,
+            scenario=scenario,
+            vibe=vibe,
+        )
+        prompt = (
+            f"platform={platform}\noutfit_summary={outfit_summary}\nuser_voice={user_voice!s}\n"
+            f"tone={tone!s}\nemotion={emotion!s}\ntarget_audience={target_audience!s}\n"
+            f"scenario={scenario!s}\nvibe={vibe!s}"
+        )
         out: NarrativeAgentOutput = (await agent.run(prompt, deps=deps)).output
         cap = None if platform == "linkedin" else out.caption
-        return GenerateScriptResponse(script=out.script, caption=cap, used_live_agent=True)
+        return GenerateScriptResponse(
+            script=out.script,
+            caption=cap,
+            hashtags=out.hashtags,
+            used_live_agent=True,
+        )
     except Exception:
-        return _narrative_offline(platform, outfit_summary, user_voice)
+        return _narrative_offline(
+            platform,
+            outfit_summary,
+            user_voice,
+            tone=tone,
+            emotion=emotion,
+            target_audience=target_audience,
+            scenario=scenario,
+            vibe=vibe,
+        )
 
 
 async def generate_reel_narration_with_optional_agent(
@@ -279,9 +390,12 @@ async def generate_reel_narration_with_optional_agent(
     voice = user_voice or "confident, warm, and concise"
     if not get_settings().has_live_llm:
         face = "with your face anchor" if face_anchor_present else "without a face anchor"
+        summary = outfit_summary.strip()
+        if summary.lower().startswith("outfit:"):
+            summary = summary[7:].strip()
         return (
-            f"Runway reel narration ({face}): Clean silhouette, calm palette, and a confident walk. "
-            f"Outfit: {outfit_summary}. Keep it {voice}."
+            f"Runway reel narration ({face}): clean silhouette, calm palette, confident walk. "
+            f"{summary}. Keep it {voice}."
         )
     try:
         agent = narrative_agent()
@@ -297,9 +411,12 @@ async def generate_reel_narration_with_optional_agent(
         return out.script
     except Exception:
         face = "with your face anchor" if face_anchor_present else "without a face anchor"
+        summary = outfit_summary.strip()
+        if summary.lower().startswith("outfit:"):
+            summary = summary[7:].strip()
         return (
-            f"Runway reel narration ({face}): Clean silhouette, calm palette, and a confident walk. "
-            f"Outfit: {outfit_summary}. Keep it {voice}."
+            f"Runway reel narration ({face}): clean silhouette, calm palette, confident walk. "
+            f"{summary}. Keep it {voice}."
         )
 
 

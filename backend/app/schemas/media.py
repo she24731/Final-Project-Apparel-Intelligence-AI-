@@ -9,11 +9,17 @@ class GenerateScriptRequest(BaseModel):
     platform: Literal["linkedin", "instagram", "tiktok"] = "linkedin"
     outfit_summary: str
     user_voice: str | None = Field(default=None, description="Short note on tone or persona")
+    tone: str | None = Field(default=None, description="e.g. warm, crisp, authoritative")
+    emotion: str | None = Field(default=None, description="e.g. grounded excitement, calm confidence")
+    target_audience: str | None = Field(default=None, description="Who should feel spoken to")
+    scenario: str | None = Field(default=None, description="Where this is filmed / context")
+    vibe: str | None = Field(default=None, description="Aesthetic vibe label")
 
 
 class GenerateScriptResponse(BaseModel):
     script: str
     caption: str | None = None
+    hashtags: list[str] | None = None
     used_live_agent: bool = False
 
 

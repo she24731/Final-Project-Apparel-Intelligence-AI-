@@ -32,3 +32,8 @@ class NarrativeDeps(BaseModel):
     platform: str
     outfit_summary: str
     user_voice: str | None = None
+    tone: str | None = None
+    emotion: str | None = None
+    target_audience: str | None = None
+    scenario: str | None = None
+    vibe: str | None = None

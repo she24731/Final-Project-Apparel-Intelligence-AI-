@@ -3,6 +3,14 @@
 const API_BASE =
   import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "/api" : "http://127.0.0.1:8000");
 
+/** Resolve backend-served paths like `/generated_media/x.mp4` or `uploads/x.jpg` for <video>/<img> and downloads. */
+export function mediaUrl(path: string): string {
+  if (!path) return path;
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE}${p}`;
+}
+
 export class ApiError extends Error {
   status: number;
   body: string;

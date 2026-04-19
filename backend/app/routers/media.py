@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import uuid
-
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.agents.orchestrator import generate_reel_narration_with_optional_agent, generate_script_with_optional_agent
 from app.config import get_settings
-from app.media.pipeline import build_media_prompts, pick_provider
+from app.media.pipeline import build_anchor_scenes, build_media_prompts
 from app.schemas.media import GenerateScriptRequest, GenerateScriptResponse, GenerateVideoRequest, GenerateVideoResponse
+from app.schemas.reel_preview import PreviewReelCopyRequest, PreviewReelCopyResponse
+from app.services.video_generation import run_generate_video
 
 router = APIRouter(tags=["media"])
 
@@ -18,32 +18,42 @@ async def generate_script(body: GenerateScriptRequest) -> GenerateScriptResponse
         platform=body.platform,
         outfit_summary=body.outfit_summary,
         user_voice=body.user_voice,
+        tone=body.tone,
+        emotion=body.emotion,
+        target_audience=body.target_audience,
+        scenario=body.scenario,
+        vibe=body.vibe,
     )
 
 
 @router.post("/generate-video", response_model=GenerateVideoResponse)
 async def generate_video(body: GenerateVideoRequest) -> GenerateVideoResponse:
-    settings = get_settings()
-    provider = pick_provider(provider_name=settings.media_provider, has_runway_key=bool(settings.runway_api_key))
+    return await run_generate_video(body)
+
+
+@router.post("/preview-reel-copy", response_model=PreviewReelCopyResponse)
+async def preview_reel_copy(body: PreviewReelCopyRequest) -> PreviewReelCopyResponse:
     prompts = build_media_prompts(outfit=None, narrative=body.scene_prompt, duration_seconds=body.duration_seconds)
-    # Auto narration if missing (Gemini when available; deterministic fallback otherwise)
     narration = body.narration_text
     if narration is None:
         narration = await generate_reel_narration_with_optional_agent(
             outfit_summary=body.scene_prompt,
-            face_anchor_present=bool(body.face_anchor_image_path),
+            face_anchor_present=body.face_anchor_present,
             user_voice=None,
         )
-        body.narration_text = narration
-    res = await provider.generate(req=body, prompts=prompts)
-    # Ensure these are always present for the UI.
-    if res.description is None:
-        res.description = prompts.storyboard.logline
-    if res.narration_text is None:
-        res.narration_text = body.narration_text
-    if res.video_prompt is None:
-        res.video_prompt = prompts.video_prompt
-    return res
+    anchors = list(body.anchor_image_paths)
+    scenes = build_anchor_scenes(
+        anchor_paths=anchors,
+        scene_prompt=body.scene_prompt,
+        narration=narration,
+        face_anchor_path=body.face_anchor_path,
+    )
+    return PreviewReelCopyResponse(
+        description=prompts.storyboard.logline,
+        narration_text=narration,
+        video_prompt=prompts.video_prompt,
+        scenes=scenes,
+    )
 
 
 @router.post("/upload-anchor")

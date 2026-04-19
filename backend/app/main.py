@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app.routers import health, media, purchase, recommend, wardrobe
+from app.routers import assistant, health, media, purchase, recommend, social, wardrobe
 
 app = FastAPI(title="Apparel Intelligence API", version="0.1.0")
 
@@ -26,6 +26,8 @@ app.include_router(wardrobe.router)
 app.include_router(recommend.router)
 app.include_router(purchase.router)
 app.include_router(media.router)
+app.include_router(social.router)
+app.include_router(assistant.router)
 
 # Serve uploaded images for UI thumbnails.
 app.mount("/uploads", StaticFiles(directory=str(_settings.uploads_dir)), name="uploads")

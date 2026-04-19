@@ -10,8 +10,11 @@ import { HomePage } from "@/pages/HomePage";
 import { StylePage } from "@/pages/StylePage";
 import { WardrobePage } from "@/pages/WardrobePage";
 import type {
+  AssistantTurnResponse,
   GarmentRecord,
+  GenerateScriptRequestBody,
   GenerateScriptResponse,
+  GenerateVideoRequestBody,
   GenerateVideoResponse,
   PurchaseAnalysisResponse,
   RecommendOutfitResponse,
@@ -162,18 +165,11 @@ export default function App() {
     }
   };
 
-  const genScript = async (platform: "linkedin" | "instagram" | "tiktok") => {
+  const genScript = async (body: GenerateScriptRequestBody) => {
     setBusyKey("scr", true);
     setErr("scr", null);
-    const outfit_summary =
-      recommendation?.garments.map((g) => `${g.color} ${g.category}`).join(", ") ??
-      "ivory shirt, navy chinos, charcoal coat, brown loafers";
     try {
-      const res = await apiPostJson<GenerateScriptResponse>("/generate-script", {
-        platform,
-        outfit_summary,
-        user_voice: context.preference || null,
-      });
+      const res = await apiPostJson<GenerateScriptResponse>("/generate-script", body);
       setScript(res);
     } catch (e) {
       setErr("scr", "Couldn’t generate live copy. Showing a demo script.");
@@ -183,7 +179,7 @@ export default function App() {
     }
   };
 
-  const genVideo = async () => {
+  const renderVideo = async (body: GenerateVideoRequestBody) => {
     setBusyKey("vid", true);
     setErr("vid", null);
     try {
@@ -191,16 +187,7 @@ export default function App() {
         setErr("vid", "Pick an outfit first (from Style or Buy Analyzer), then generate a preview.");
         return;
       }
-      const outfit_summary = recommendation.garments.map((g) => `${g.color} ${g.category}`).join(", ");
-      const anchors = recommendation.garments
-        .map((g) => g.image_path)
-        .filter((p) => typeof p === "string" && p.startsWith("uploads/"));
-      const res = await apiPostJson<GenerateVideoResponse>("/generate-video", {
-        scene_prompt: `Outfit: ${outfit_summary}. Runway walk-through with natural light and slow pan.`,
-        anchor_image_paths: anchors,
-        face_anchor_image_path: faceAnchorPath,
-        duration_seconds: 30,
-      });
+      const res = await apiPostJson<GenerateVideoResponse>("/generate-video", body);
       setVideo(res);
     } catch (e) {
       setErr("vid", "Couldn’t generate a live preview. Showing a demo preview.");
@@ -282,11 +269,27 @@ export default function App() {
             faceAnchorPath={faceAnchorPath}
             onUploadFaceAnchor={uploadFaceAnchor}
             onGenerateScript={genScript}
-            onGenerateVideo={genVideo}
+            onRenderVideo={renderVideo}
+            stylePreference={context.preference}
           />
         ) : null}
       </AppShell>
-      <ChatWidget recommendation={recommendation} />
+      <ChatWidget
+        context={{
+          occasion: context.occasion,
+          weather: context.weather,
+          vibe: context.vibe,
+          preference: context.preference,
+          wardrobe_item_ids: serverWardrobeIds,
+          outfit_summary: recommendation?.garments.map((g) => `${g.color} ${g.category}`).join(", ") ?? null,
+          face_anchor_path: faceAnchorPath,
+        }}
+        onApplyResult={(res: AssistantTurnResponse) => {
+          if (res.recommendation) setRecommendation(res.recommendation);
+          if (res.script) setScript(res.script);
+          if (res.video) setVideo(res.video);
+        }}
+      />
     </ImageLightboxProvider>
   );
 }

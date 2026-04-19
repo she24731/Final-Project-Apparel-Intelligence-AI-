@@ -36,3 +36,4 @@ class PurchaseROIAdvisorOutput(BaseModel):
 class NarrativeAgentOutput(BaseModel):
     script: str
     caption: str | None = None
+    hashtags: list[str] | None = None

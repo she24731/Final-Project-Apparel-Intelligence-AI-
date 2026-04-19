@@ -1,42 +1,78 @@
 import { useMemo, useState } from "react";
-import type { ChatTurn, RecommendOutfitResponse } from "@/types";
+import type { AssistantTurnResponse, ChatContextPayload, ChatTurn } from "@/types";
+import { ApiError, apiPostJson } from "@/lib/api";
 
-export function ChatWidget({ recommendation }: { recommendation: RecommendOutfitResponse | null }) {
+export function ChatWidget({
+  context,
+  onApplyResult,
+}: {
+  context: ChatContextPayload;
+  onApplyResult: (res: AssistantTurnResponse) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const [input, setInput] = useState("What should I tweak if it rains after work?");
+  const [input, setInput] = useState("Recommend an outfit for a rainy work day.");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
+  const [busy, setBusy] = useState(false);
 
   const starter = useMemo(
     () =>
-      recommendation
-        ? `I’d anchor on: ${recommendation.outfit_items.map((i) => i.role).join(", ")}. Want a safer shoe swap or a warmer mid-layer?`
-        : "Upload a wardrobe and generate an outfit. Then ask me to tweak it for weather, vibe, or formality.",
-    [recommendation],
+      "Ask for outfits, social scripts (LinkedIn / Instagram / TikTok), reel copy, or video. Example: “Write a TikTok script for this outfit” or “Generate video”.",
+    [],
   );
 
-  const send = () => {
+  const send = async () => {
     const trimmed = input.trim();
-    if (!trimmed) return;
+    if (!trimmed || busy) return;
+    setBusy(true);
     const user: ChatTurn = { id: crypto.randomUUID(), role: "user", content: trimmed, ts: new Date().toISOString() };
-    const assistant: ChatTurn = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content:
-        "For rain: add a water-resistant outer layer, swap to shoes with traction, and keep the palette tight (2–3 hues). If you’ll be indoors, a light mid-layer keeps you comfortable without bulk.",
-      ts: new Date().toISOString(),
-    };
-    setTurns((prev) => [...prev, user, assistant]);
+    setTurns((prev) => [...prev, user]);
     setInput("");
+    try {
+      const res = await apiPostJson<AssistantTurnResponse>("/assistant/turn", {
+        message: trimmed,
+        context: {
+          occasion: context.occasion,
+          weather: context.weather,
+          vibe: context.vibe,
+          preference: context.preference,
+          wardrobe_item_ids: context.wardrobe_item_ids,
+          outfit_summary: context.outfit_summary,
+          face_anchor_path: context.face_anchor_path,
+        },
+      });
+      onApplyResult(res);
+      const assistant: ChatTurn = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: res.reply,
+        ts: new Date().toISOString(),
+      };
+      setTurns((prev) => [...prev, assistant]);
+    } catch (e) {
+      const msg =
+        e instanceof ApiError
+          ? `Assistant error (${e.status}). ${e.body}`
+          : "Couldn’t reach the assistant. Is the backend running on port 8000?";
+      const assistant: ChatTurn = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: msg,
+        ts: new Date().toISOString(),
+      };
+      setTurns((prev) => [...prev, assistant]);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div className="fixed bottom-6 right-6 z-50">
       {open ? (
-        <div className="w-[340px] overflow-hidden rounded-3xl border border-line bg-ink-900/80 shadow-2xl backdrop-blur">
+        <div className="w-[min(100vw-2rem,380px)] overflow-hidden rounded-3xl border border-line bg-ink-900/80 shadow-2xl backdrop-blur">
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-accent">Stylist</p>
-              <p className="mt-1 text-xs text-mist/60">Quick outfit help</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-accent">Concierge</p>
+              <p className="mt-1 text-xs text-mist/60">Full app control via chat</p>
             </div>
             <button
               type="button"
@@ -49,7 +85,7 @@ export function ChatWidget({ recommendation }: { recommendation: RecommendOutfit
 
           <div className="max-h-72 space-y-3 overflow-auto px-5 py-4">
             <div className="rounded-2xl border border-line bg-ink-950/40 px-4 py-3 text-sm text-mist/80">
-              <span className="font-semibold text-mist">Stylist:</span> {starter}
+              <span className="font-semibold text-mist">Tip:</span> {starter}
             </div>
             {turns.map((t) => (
               <div
@@ -60,7 +96,7 @@ export function ChatWidget({ recommendation }: { recommendation: RecommendOutfit
                 ].join(" ")}
               >
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-mist/40">{t.role}</p>
-                <p className="mt-1">{t.content}</p>
+                <p className="mt-1 whitespace-pre-wrap">{t.content}</p>
               </div>
             ))}
           </div>
@@ -71,17 +107,18 @@ export function ChatWidget({ recommendation }: { recommendation: RecommendOutfit
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") send();
+                  if (e.key === "Enter" && !e.shiftKey) void send();
                 }}
                 className="flex-1 rounded-2xl border border-line bg-ink-950 px-4 py-3 text-sm text-mist outline-none ring-accent/20 placeholder:text-mist/35 focus:ring-2"
-                placeholder="Ask the stylist…"
+                placeholder="Ask the concierge…"
               />
               <button
                 type="button"
-                onClick={send}
-                className="rounded-2xl bg-mist px-4 py-3 text-sm font-semibold text-ink-950"
+                disabled={busy}
+                onClick={() => void send()}
+                className="rounded-2xl bg-mist px-4 py-3 text-sm font-semibold text-ink-950 disabled:opacity-40"
               >
-                Send
+                {busy ? "…" : "Send"}
               </button>
             </div>
           </div>
@@ -98,4 +135,3 @@ export function ChatWidget({ recommendation }: { recommendation: RecommendOutfit
     </div>
   );
 }
-

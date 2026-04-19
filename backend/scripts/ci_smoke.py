@@ -65,6 +65,60 @@ def main() -> int:
     # Ensure response is JSON-serializable (no numpy scalars, etc.)
     json.dumps(data)
 
+    r = client.post(
+        "/generate-script",
+        json={
+            "platform": "tiktok",
+            "outfit_summary": "navy top, charcoal trousers, white sneakers",
+            "tone": "warm",
+            "emotion": "playful",
+            "target_audience": "creatives",
+            "scenario": "commute",
+            "vibe": "quiet luxury",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert "script" in r.json()
+
+    r = client.post(
+        "/preview-reel-copy",
+        json={
+            "scene_prompt": "neutral top, neutral bottom. runway walk.",
+            "anchor_image_paths": [],
+            "face_anchor_path": None,
+            "duration_seconds": 12,
+            "face_anchor_present": False,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert "scenes" in r.json()
+
+    r = client.post(
+        "/social/prepare-post",
+        json={
+            "platform": "linkedin",
+            "script": "Hello world",
+            "caption": "Test",
+            "hashtags": ["style"],
+            "link_url": "http://127.0.0.1:5173",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("clipboard_text")
+
+    r = client.post(
+        "/assistant/turn",
+        json={
+            "message": "Write an Instagram script for this outfit",
+            "context": {
+                "outfit_summary": "ivory shirt, navy chinos",
+                "wardrobe_item_ids": [],
+            },
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("reply")
+
     print("ci_smoke_ok")
     return 0
 
