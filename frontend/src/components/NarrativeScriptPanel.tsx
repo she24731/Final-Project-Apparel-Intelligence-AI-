@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { apiPostJson } from "@/lib/api";
-import type { GenerateScriptRequestBody, RecommendOutfitResponse, SocialPostPrepareResponse } from "@/types";
+import type {
+  GenerateScriptRequestBody,
+  GenerateScriptResponse,
+  RecommendOutfitResponse,
+  SocialPostPrepareResponse,
+} from "@/types";
 
 export function NarrativeScriptPanel({
   recommendation,
