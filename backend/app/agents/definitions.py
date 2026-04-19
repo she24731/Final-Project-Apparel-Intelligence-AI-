@@ -4,8 +4,9 @@ import os
 
 from pydantic_ai import Agent
 
-from app.agents.deps import NarrativeDeps, PurchaseDeps, StylingDeps, WardrobeDeps
+from app.agents.deps import ConciergeDeps, NarrativeDeps, PurchaseDeps, StylingDeps, WardrobeDeps
 from app.agents.outputs import (
+    ConciergeOutput,
     NarrativeAgentOutput,
     PurchaseROIAdvisorOutput,
     StylingAgentOutput,
@@ -35,6 +36,22 @@ Rules:
 - instagram: warm, visual, 1–2 line breaks in caption; add 3–6 tasteful hashtags in `hashtags`.
 - tiktok: punchy hooks, pattern interrupts ok; short lines; add 4–8 hashtags in `hashtags`.
 Never invent brand names. Keep it filmable on a phone."""
+
+CONCIERGE_SYSTEM = """You are the Apparel Intelligence concierge. You help with wardrobe, outfits, social scripts, and runway reels.
+You MUST choose exactly one `action` field for every turn:
+
+- chat_only: styling advice, Q&A, clarifications, small talk—no backend tool call.
+- recommend_outfit: user wants an outfit suggestion for occasion/weather (use CONTEXT fields; wardrobe JSON lists real ids).
+- write_script: user wants spoken script/caption/hooks for LinkedIn, Instagram, or TikTok (set script_platform).
+- preview_reel: user wants runway description + narration draft (no video file).
+- render_video: user explicitly wants to generate a video file / reel render (may take time; uses Veo when configured).
+- analyze_purchase: user asks whether to buy an item; set purchase_garment_id to a real id from wardrobe JSON.
+
+Rules:
+- Prefer chat_only if the user is vague or only greeting.
+- Never invent garment ids; purchase_garment_id must match wardrobe JSON if used.
+- Keep `reply` concise (<= 120 words) unless the user asks for detail.
+- If recommending an action that needs missing info, use chat_only and ask one clarifying question."""
 
 
 def _ensure_gemini_env(settings: Settings) -> None:
@@ -86,6 +103,17 @@ def build_narrative_agent(settings: Settings) -> Agent[NarrativeDeps, NarrativeA
     )
 
 
+def build_concierge_agent(settings: Settings) -> Agent[ConciergeDeps, ConciergeOutput]:
+    _ensure_gemini_env(settings)
+    return Agent(
+        settings.pydantic_ai_model,
+        deps_type=ConciergeDeps,
+        output_type=ConciergeOutput,
+        system_prompt=CONCIERGE_SYSTEM,
+        retries=2,
+    )
+
+
 _agents: dict[str, object] = {}
 
 
@@ -126,4 +154,14 @@ def narrative_agent() -> Agent[NarrativeDeps, NarrativeAgentOutput]:
     key = "narrative"
     if key not in _agents:
         _agents[key] = build_narrative_agent(s)
+    return _agents[key]  # type: ignore[return-value]
+
+
+def concierge_agent() -> Agent[ConciergeDeps, ConciergeOutput]:
+    s = get_settings()
+    if not s.has_live_llm:
+        raise RuntimeError("Live LLM disabled")
+    key = "concierge"
+    if key not in _agents:
+        _agents[key] = build_concierge_agent(s)
     return _agents[key]  # type: ignore[return-value]

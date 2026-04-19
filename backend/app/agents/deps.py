@@ -37,3 +37,15 @@ class NarrativeDeps(BaseModel):
     target_audience: str | None = None
     scenario: str | None = None
     vibe: str | None = None
+
+
+class ConciergeDeps(BaseModel):
+    """Context for the conversational concierge (routing + grounding)."""
+
+    occasion: str = ""
+    weather: str = ""
+    vibe: str = ""
+    preference: str = ""
+    outfit_summary: str | None = None
+    face_anchor_path: str | None = None
+    wardrobe_json: str = "[]"

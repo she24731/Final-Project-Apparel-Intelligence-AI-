@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
+    # Veo model id for generate_videos (see Google AI “Generate videos” docs; override via GEMINI_VIDEO_MODEL).
     gemini_video_model: str = Field(default="veo-3.1-generate-preview", validation_alias="GEMINI_VIDEO_MODEL")
     runway_api_key: str | None = Field(default=None, validation_alias="RUNWAY_API_KEY")
     media_provider: str = Field(default="mock", validation_alias="MEDIA_PROVIDER")

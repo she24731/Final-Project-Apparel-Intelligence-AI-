@@ -37,3 +37,22 @@ class NarrativeAgentOutput(BaseModel):
     script: str
     caption: str | None = None
     hashtags: list[str] | None = None
+
+
+class ConciergeOutput(BaseModel):
+    """Structured routing for the chat concierge (Gemini)."""
+
+    reply: str = Field(..., description="Primary message to show the user (plain text or light Markdown).")
+    action: Literal[
+        "chat_only",
+        "recommend_outfit",
+        "write_script",
+        "preview_reel",
+        "render_video",
+        "analyze_purchase",
+    ] = "chat_only"
+    script_platform: Literal["linkedin", "instagram", "tiktok"] | None = None
+    purchase_garment_id: str | None = Field(
+        default=None,
+        description="Wardrobe garment id when action is analyze_purchase.",
+    )
