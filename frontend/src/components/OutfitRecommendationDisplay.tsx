@@ -5,7 +5,7 @@ export function OutfitRecommendationDisplay({ data, busy }: { data: RecommendOut
   return (
     <Card
       title="Outfit recommendation"
-      subtitle="Cards show selected pieces, confidence, and grounded style rules."
+      subtitle="A single clean recommendation with a short explanation."
       right={busy ? <span className="text-xs text-mist/50">Updating…</span> : null}
     >
       {!data ? (
@@ -19,10 +19,6 @@ export function OutfitRecommendationDisplay({ data, busy }: { data: RecommendOut
               <p className="text-xs font-semibold uppercase tracking-wide text-mist/50">Confidence</p>
               <p className="mt-1 text-3xl font-semibold text-mist">{data.confidence.toFixed(2)}</p>
             </div>
-            <p className="max-w-xl text-xs text-mist/45">
-              Rules: {data.retrieved_style_rule_ids.join(", ") || "—"} · Agent:{" "}
-              {data.used_live_agent ? "live" : "mock / heuristic"}
-            </p>
           </div>
 
           <p className="text-sm leading-relaxed text-mist/80">{data.explanation}</p>

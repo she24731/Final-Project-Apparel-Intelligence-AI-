@@ -17,7 +17,7 @@ export function AgentChatPanel({ recommendation }: { recommendation: RecommendOu
   );
 
   return (
-    <Card title="Stylist chat (client mock)" subtitle="Course MVP: mirrors agent tone; wire to /chat SSE later.">
+    <Card title="Stylist chat" subtitle="Ask for alternatives, tweaks, or a second opinion.">
       <div className="mb-4 rounded-xl border border-line bg-ink-950/40 p-4 text-sm text-mist/75">
         <span className="font-semibold text-mist">Stylist:</span> {starter}
       </div>

@@ -20,7 +20,7 @@ export function NarrativeScriptPanel({
     "Ivory shirt · navy chinos · charcoal coat · brown loafers";
 
   return (
-    <Card title="Narrative output" subtitle="Short-form script + optional caption (NarrativeAgent / offline templates).">
+    <Card title="Script & caption" subtitle="Generate a short script you can actually say out loud.">
       <div className="flex flex-wrap items-center gap-3">
         <label className="text-xs text-mist/60">
           Platform
@@ -50,7 +50,6 @@ export function NarrativeScriptPanel({
         <div className="mt-4 space-y-3">
           <p className="text-sm leading-relaxed text-mist/85">{script.script}</p>
           {script.caption ? <p className="text-xs text-mist/60">Caption: {script.caption}</p> : null}
-          <p className="text-[11px] text-mist/40">{script.used_live_agent ? "live" : "template"} narrative</p>
         </div>
       )}
     </Card>

@@ -20,7 +20,7 @@ export function BuyOrSkipAnalyzer({
   const [formality, setFormality] = useState(0.55);
 
   return (
-    <Card title="Buy / Skip analyzer" subtitle="Compatibility + versatility heuristics with optional LLM overlay.">
+    <Card title="Analyze a purchase" subtitle="A simple, deterministic scorecard based on your current wardrobe.">
       <div className="grid gap-4 md:grid-cols-3">
         <label className="space-y-2 text-xs font-medium text-mist/70">
           Category
@@ -94,7 +94,6 @@ export function BuyOrSkipAnalyzer({
           <div className="rounded-xl border border-line bg-ink-950/40 p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-mist/50">Verdict</p>
             <p className="mt-2 text-2xl font-semibold text-mist">{result.recommendation}</p>
-            <p className="mt-2 text-xs text-mist/55">{result.used_live_agent ? "LLM overlay on" : "Deterministic"}</p>
           </div>
           <div className="md:col-span-3">
             <p className="text-sm text-mist/80">{result.explanation}</p>

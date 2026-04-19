@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
-    gemini_model: str = Field(default="gemini-3.1-pro", validation_alias="GEMINI_MODEL")
+    gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
     runway_api_key: str | None = Field(default=None, validation_alias="RUNWAY_API_KEY")
     media_provider: str = Field(default="mock", validation_alias="MEDIA_PROVIDER")
     backend_host: str = Field(default="127.0.0.1", validation_alias="BACKEND_HOST")

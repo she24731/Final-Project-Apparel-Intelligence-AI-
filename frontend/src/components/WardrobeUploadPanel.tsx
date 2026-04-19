@@ -20,8 +20,8 @@ export function WardrobeUploadPanel({
 
   return (
     <Card
-      title="Wardrobe ingestion"
-      subtitle="Upload garment photos; metadata + embeddings are created server-side (mock vectors offline)."
+      title="Upload items"
+      subtitle="Add a few pieces. We’ll keep the details organized for styling and purchase decisions."
       right={<span className="text-xs text-mist/50">{summary}</span>}
     >
       <div className="grid gap-4 md:grid-cols-2">
@@ -46,7 +46,7 @@ export function WardrobeUploadPanel({
             placeholder="wool, winter, navy…"
             className="w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-sm text-mist outline-none ring-accent/30 placeholder:text-mist/35 focus:ring-2"
           />
-          {busy ? <p className="text-xs text-mist/60">Processing…</p> : null}
+          {busy ? <p className="text-xs text-mist/60">Adding…</p> : null}
           {error ? <p className="text-xs text-red-300">{error}</p> : null}
         </div>
 
@@ -66,7 +66,9 @@ export function WardrobeUploadPanel({
                     </p>
                     <p className="mt-1 text-xs text-mist/50">{g.tags.slice(0, 4).join(" · ")}</p>
                   </div>
-                  <p className="font-mono text-[11px] text-mist/40">{g.id.slice(0, 8)}</p>
+                  <span className="rounded-full border border-line bg-ink-950/50 px-3 py-1 text-[11px] text-mist/60">
+                    Saved
+                  </span>
                 </li>
               ))}
             </ul>

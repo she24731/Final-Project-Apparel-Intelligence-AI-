@@ -12,8 +12,8 @@ export function RunwayReelPreviewPanel({
 }) {
   return (
     <Card
-      title="Runway reel preview"
-      subtitle="Video integration hook (Runway/Veo). MVP returns structured mock status."
+      title="Runway preview"
+      subtitle="A short runway-style concept preview for this outfit."
       right={
         <button
           type="button"
@@ -27,7 +27,7 @@ export function RunwayReelPreviewPanel({
     >
       {!video ? (
         <div className="rounded-xl border border-dashed border-line/80 bg-ink-950/30 p-8 text-center text-sm text-mist/55">
-          Generate a mock runway job to see provider + messaging.
+          Generate a preview to see the runway concept.
         </div>
       ) : (
         <div className="space-y-3">
@@ -35,9 +35,6 @@ export function RunwayReelPreviewPanel({
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-accent">Runway</p>
               <p className="max-w-md text-sm text-mist/75">{video.preview_message}</p>
-              <p className="font-mono text-[11px] text-mist/45">
-                {video.status} · {video.provider} · {video.job_id}
-              </p>
             </div>
           </div>
           {video.video_url ? (

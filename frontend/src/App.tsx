@@ -1,14 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { AgentChatPanel } from "@/components/AgentChatPanel";
-import { BuyOrSkipAnalyzer } from "@/components/BuyOrSkipAnalyzer";
-import { Dashboard } from "@/components/Dashboard";
-import { NarrativeScriptPanel } from "@/components/NarrativeScriptPanel";
-import { OccasionContextForm, type OccasionContext } from "@/components/OccasionContextForm";
-import { OutfitRecommendationDisplay } from "@/components/OutfitRecommendationDisplay";
-import { RunwayReelPreviewPanel } from "@/components/RunwayReelPreviewPanel";
-import { WardrobeUploadPanel } from "@/components/WardrobeUploadPanel";
-import { ApiError, apiGet, apiPostJson, apiPostMultipart } from "@/lib/api";
+import { useMemo, useState } from "react";
+import { AppShell, type AppRoute } from "@/components/layout/AppShell";
+import { ApiError, apiPostJson, apiPostMultipart } from "@/lib/api";
 import { mockPurchase, mockRecommendation, mockScript, mockVideo, mockWardrobe } from "@/mocks/sampleData";
+import { BuyAnalyzerPage } from "@/pages/BuyAnalyzerPage";
+import { ChatPage } from "@/pages/ChatPage";
+import { ContentPage } from "@/pages/ContentPage";
+import { StylePage } from "@/pages/StylePage";
+import { WardrobePage } from "@/pages/WardrobePage";
 import type {
   GarmentRecord,
   GenerateScriptResponse,
@@ -18,11 +16,10 @@ import type {
 } from "@/types";
 
 export default function App() {
-  const [useLiveApi, setUseLiveApi] = useState(false);
-  const [healthLabel, setHealthLabel] = useState("unknown");
+  const [route, setRoute] = useState<AppRoute>("style");
 
   const [wardrobe, setWardrobe] = useState<GarmentRecord[]>(mockWardrobe);
-  const [context, setContext] = useState<OccasionContext>({
+  const [context, setContext] = useState({
     occasion: "work_presentation",
     weather: "mild_clear",
     vibe: "quiet_luxury",
@@ -40,66 +37,31 @@ export default function App() {
   const setBusyKey = (k: string, v: boolean) => setBusy((p) => ({ ...p, [k]: v }));
   const setErr = (k: string, v: string | null) => setErrors((p) => ({ ...p, [k]: v }));
 
-  const refreshHealth = useCallback(async () => {
-    if (!useLiveApi) {
-      setHealthLabel("mock mode");
-      return;
-    }
-    try {
-      const h = await apiGet<{ status: string }>("/health");
-      setHealthLabel(h.status === "ok" ? "connected" : h.status);
-    } catch {
-      setHealthLabel("unreachable");
-    }
-  }, [useLiveApi]);
-
-  useEffect(() => {
-    void refreshHealth();
-  }, [refreshHealth]);
-
-  useEffect(() => {
-    if (useLiveApi) {
-      setWardrobe([]);
-      setRecommendation(null);
-      setPurchase(null);
-      setScript(null);
-      setVideo(null);
-    } else {
-      setWardrobe(mockWardrobe);
-      setRecommendation(mockRecommendation);
-      setPurchase(mockPurchase);
-      setScript(mockScript);
-      setVideo(mockVideo);
-    }
-  }, [useLiveApi]);
-
   const wardrobeIds = useMemo(() => wardrobe.map((g) => g.id), [wardrobe]);
 
   const ingest = async (file: File, hints: string | undefined) => {
     setBusyKey("ingest", true);
     setErr("ingest", null);
     try {
-      if (!useLiveApi) {
-        const next: GarmentRecord = {
-          id: `local-${crypto.randomUUID()}`,
-          category: "top",
-          color: "uploaded",
-          formality_score: 0.45,
-          season: "all-season",
-          tags: hints ? hints.split(",").map((s) => s.trim()) : ["upload"],
-          image_path: `uploads/${file.name}`,
-          embedding: [],
-        };
-        setWardrobe((w) => [...w, next]);
-        return;
-      }
       const fd = new FormData();
       fd.append("file", file);
       if (hints) fd.append("hints", hints);
       const res = await apiPostMultipart<{ garment: GarmentRecord }>("/ingest-garment", fd);
       setWardrobe((w) => [...w, res.garment]);
     } catch (e) {
-      setErr("ingest", e instanceof ApiError ? `${e.status}: ${e.body}` : "upload failed");
+      // Quiet fallback: still add a local placeholder so the flow continues.
+      const next: GarmentRecord = {
+        id: `local-${crypto.randomUUID()}`,
+        category: "top",
+        color: "uploaded",
+        formality_score: 0.45,
+        season: "all-season",
+        tags: hints ? hints.split(",").map((s) => s.trim()) : ["upload"],
+        image_path: `uploads/${file.name}`,
+        embedding: [],
+      };
+      setWardrobe((w) => [...w, next]);
+      setErr("ingest", e instanceof ApiError ? "Couldn’t reach the server. Saved locally for the demo." : "Saved locally for the demo.");
     } finally {
       setBusyKey("ingest", false);
     }
@@ -109,10 +71,6 @@ export default function App() {
     setBusyKey("rec", true);
     setErr("rec", null);
     try {
-      if (!useLiveApi) {
-        setRecommendation(mockRecommendation);
-        return;
-      }
       const res = await apiPostJson<RecommendOutfitResponse>("/recommend-outfit", {
         occasion: context.occasion,
         weather: context.weather,
@@ -122,7 +80,7 @@ export default function App() {
       });
       setRecommendation(res);
     } catch (e) {
-      setErr("rec", e instanceof ApiError ? `${e.status}: ${e.body}` : "recommend failed");
+      setErr("rec", "Couldn’t generate a live recommendation. Showing a demo result.");
       setRecommendation(mockRecommendation);
     } finally {
       setBusyKey("rec", false);
@@ -133,17 +91,13 @@ export default function App() {
     setBusyKey("pur", true);
     setErr("pur", null);
     try {
-      if (!useLiveApi) {
-        setPurchase(mockPurchase);
-        return;
-      }
       const res = await apiPostJson<PurchaseAnalysisResponse>("/analyze-purchase", {
         candidate,
         wardrobe_item_ids: wardrobeIds,
       });
       setPurchase(res);
     } catch (e) {
-      setErr("pur", e instanceof ApiError ? `${e.status}: ${e.body}` : "analyze failed");
+      setErr("pur", "Couldn’t run a live analysis. Showing a demo result.");
       setPurchase(mockPurchase);
     } finally {
       setBusyKey("pur", false);
@@ -157,10 +111,6 @@ export default function App() {
       recommendation?.garments.map((g) => `${g.color} ${g.category}`).join(", ") ??
       "ivory shirt, navy chinos, charcoal coat, brown loafers";
     try {
-      if (!useLiveApi) {
-        setScript(mockScript);
-        return;
-      }
       const res = await apiPostJson<GenerateScriptResponse>("/generate-script", {
         platform,
         outfit_summary,
@@ -168,7 +118,7 @@ export default function App() {
       });
       setScript(res);
     } catch (e) {
-      setErr("scr", e instanceof ApiError ? `${e.status}: ${e.body}` : "script failed");
+      setErr("scr", "Couldn’t generate live copy. Showing a demo script.");
       setScript(mockScript);
     } finally {
       setBusyKey("scr", false);
@@ -179,10 +129,6 @@ export default function App() {
     setBusyKey("vid", true);
     setErr("vid", null);
     try {
-      if (!useLiveApi) {
-        setVideo(mockVideo);
-        return;
-      }
       const res = await apiPostJson<GenerateVideoResponse>("/generate-video", {
         scene_prompt: "Runway walk-through with natural light and slow pan.",
         anchor_image_paths: [],
@@ -190,7 +136,7 @@ export default function App() {
       });
       setVideo(res);
     } catch (e) {
-      setErr("vid", e instanceof ApiError ? `${e.status}: ${e.body}` : "video failed");
+      setErr("vid", "Couldn’t generate a live preview. Showing a demo preview.");
       setVideo(mockVideo);
     } finally {
       setBusyKey("vid", false);
@@ -198,18 +144,41 @@ export default function App() {
   };
 
   return (
-    <Dashboard healthLabel={healthLabel} useLiveApi={useLiveApi} onToggleLive={setUseLiveApi}>
-      <div className="space-y-6 lg:col-span-7">
-        <WardrobeUploadPanel items={wardrobe} busy={!!busy.ingest} error={errors.ingest} onIngest={ingest} />
-        <OccasionContextForm value={context} onChange={setContext} onSubmit={recommend} busy={!!busy.rec} />
-        <OutfitRecommendationDisplay data={recommendation} busy={!!busy.rec} />
-        <BuyOrSkipAnalyzer wardrobe={wardrobe} busy={!!busy.pur} error={errors.pur} result={purchase} onAnalyze={analyze} />
-      </div>
-      <div className="space-y-6 lg:col-span-5">
-        <AgentChatPanel recommendation={recommendation} />
-        <NarrativeScriptPanel recommendation={recommendation} script={script} busy={!!busy.scr} onGenerate={genScript} />
-        <RunwayReelPreviewPanel video={video} busy={!!busy.vid} onGenerate={genVideo} />
-      </div>
-    </Dashboard>
+    <AppShell route={route} onRoute={setRoute}>
+      {route === "wardrobe" ? (
+        <WardrobePage wardrobe={wardrobe} busy={!!busy.ingest} error={errors.ingest} onIngest={ingest} />
+      ) : null}
+      {route === "style" ? (
+        <StylePage
+          context={context}
+          onChange={setContext}
+          onRecommend={recommend}
+          busy={!!busy.rec}
+          error={errors.rec}
+          recommendation={recommendation}
+        />
+      ) : null}
+      {route === "buy" ? (
+        <BuyAnalyzerPage
+          wardrobe={wardrobe}
+          busy={!!busy.pur}
+          error={errors.pur}
+          result={purchase}
+          onAnalyze={analyze}
+        />
+      ) : null}
+      {route === "content" ? (
+        <ContentPage
+          recommendation={recommendation}
+          script={script}
+          video={video}
+          scriptBusy={!!busy.scr}
+          videoBusy={!!busy.vid}
+          onGenerateScript={genScript}
+          onGenerateVideo={genVideo}
+        />
+      ) : null}
+      {route === "chat" ? <ChatPage recommendation={recommendation} /> : null}
+    </AppShell>
   );
 }
