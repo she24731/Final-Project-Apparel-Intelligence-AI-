@@ -1,12 +1,15 @@
 import type { RecommendOutfitResponse } from "@/types";
+import { useImageLightbox } from "@/components/ui/ImageLightbox";
 
 export function OutfitCard({ data }: { data: RecommendOutfitResponse }) {
+  const { open } = useImageLightbox();
   const items = data.outfit_items.map((i) => {
     const g = data.garments.find((x) => x.id === i.garment_id);
     return {
       role: i.role,
       label: g ? `${g.color} ${g.category}` : i.garment_id,
       tags: g?.tags ?? [],
+      imagePath: g?.image_path ?? null,
     };
   });
 
@@ -28,7 +31,24 @@ export function OutfitCard({ data }: { data: RecommendOutfitResponse }) {
         {items.map((it) => (
           <div key={`${it.role}-${it.label}`} className="rounded-2xl border border-line bg-ink-950/40 p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-mist/50">{it.role}</p>
-            <p className="mt-2 text-lg font-semibold text-mist">{it.label}</p>
+            <div className="mt-3 flex items-center gap-3">
+              <div className="h-12 w-12 overflow-hidden rounded-xl border border-line bg-ink-950/40">
+                {it.imagePath ? (
+                  <img
+                    src={`/api/${it.imagePath}`}
+                    alt={it.label}
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                    onClick={() => open(`/api/${it.imagePath}`, it.label)}
+                    style={{ cursor: "zoom-in" }}
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                ) : null}
+              </div>
+              <p className="text-lg font-semibold text-mist">{it.label}</p>
+            </div>
             {it.tags.length ? <p className="mt-2 text-xs text-mist/50">{it.tags.slice(0, 4).join(" · ")}</p> : null}
           </div>
         ))}

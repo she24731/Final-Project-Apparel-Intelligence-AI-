@@ -55,10 +55,27 @@ Open:
 The UI is intentionally guided to reduce cognitive load:
 
 1. **Wardrobe**: upload a few garment images (adds items to the digital wardrobe)
-2. **Style**: enter context → click **Recommend outfit** → view a single clean outfit card
+2. **Style (main)**: enter context → click **Recommend outfit** → view a single clean outfit card
 3. **Buy Analyzer**: enter a candidate item → get a deterministic Buy/Maybe/No Buy result
 4. **Content**: generate a script/caption + runway preview (placeholder if no provider)
-5. **Chat**: dedicated stylist chat page (demo-safe; backend chat endpoint can be added later)
+5. **Chat**: use the bottom-right chat button anytime for quick tweaks and alternatives
+
+### Suggested “2-minute demo” (for graders)
+
+1) Go to **Wardrobe** and upload **3–6 items** (ideally: top, bottom, shoes, outerwear).  
+2) Go to **Style** and set:
+- occasion: `work_presentation`
+- weather: `mild_clear` (or `cold_rain`)
+- vibe: `quiet_luxury`
+Then click **Recommend outfit**.  
+3) Go to **Buy Analyzer**, pick a candidate (e.g., shoes in brown), click **Analyze purchase**.  
+4) Go to **Content**, generate a script and runway preview.  
+5) Click the **Chat** button (bottom-right) and ask: “Give me a rain-safe alternative.”
+
+### Accepted upload formats
+
+- **Images**: JPG/JPEG, PNG, WebP, HEIC/HEIF, AVIF, GIF  
+- **Max size**: 10MB
 
 ---
 
@@ -66,7 +83,8 @@ The UI is intentionally guided to reduce cognitive load:
 
 ### Frontend
 - **React + TypeScript + Vite + Tailwind**
-- Pages: `Wardrobe`, `Style`, `Buy Analyzer`, `Content`, `Chat`
+- Pages: `Wardrobe`, `Style`, `Buy Analyzer`, `Content`
+- Floating: bottom-right **Chat widget**
 - Uses a lightweight API client (`src/lib/api.ts`)
 
 ### Backend

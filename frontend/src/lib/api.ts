@@ -1,4 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? "/api";
+// In dev, we rely on Vite's `/api` proxy to the backend.
+// In preview/production (where proxy doesn't run), default to the local backend URL.
+const API_BASE =
+  import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "/api" : "http://127.0.0.1:8000");
 
 export class ApiError extends Error {
   status: number;
@@ -41,6 +44,15 @@ export async function apiPostMultipart<T>(path: string, form: FormData): Promise
   if (!res.ok) {
     const text = await res.text();
     throw new ApiError(`POST ${path} failed`, res.status, text);
+  }
+  return (await res.json()) as T;
+}
+
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new ApiError(`DELETE ${path} failed`, res.status, text);
   }
   return (await res.json()) as T;
 }

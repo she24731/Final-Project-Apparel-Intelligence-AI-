@@ -1,10 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell, type AppRoute } from "@/components/layout/AppShell";
-import { ApiError, apiPostJson, apiPostMultipart } from "@/lib/api";
-import { mockPurchase, mockRecommendation, mockScript, mockVideo, mockWardrobe } from "@/mocks/sampleData";
+import { ChatWidget } from "@/components/ChatWidget";
+import { ImageLightboxProvider } from "@/components/ui/ImageLightbox";
+import { ApiError, apiDelete, apiGet, apiPostJson, apiPostMultipart } from "@/lib/api";
+import { mockPurchase, mockRecommendation, mockScript, mockVideo } from "@/mocks/sampleData";
 import { BuyAnalyzerPage } from "@/pages/BuyAnalyzerPage";
-import { ChatPage } from "@/pages/ChatPage";
 import { ContentPage } from "@/pages/ContentPage";
+import { HomePage } from "@/pages/HomePage";
 import { StylePage } from "@/pages/StylePage";
 import { WardrobePage } from "@/pages/WardrobePage";
 import type {
@@ -16,20 +18,22 @@ import type {
 } from "@/types";
 
 export default function App() {
-  const [route, setRoute] = useState<AppRoute>("style");
+  const [route, setRoute] = useState<AppRoute>("wardrobe");
 
-  const [wardrobe, setWardrobe] = useState<GarmentRecord[]>(mockWardrobe);
+  const [serverWardrobe, setServerWardrobe] = useState<GarmentRecord[]>([]);
+  const [localWardrobe, setLocalWardrobe] = useState<GarmentRecord[]>([]);
   const [context, setContext] = useState({
-    occasion: "work_presentation",
-    weather: "mild_clear",
-    vibe: "quiet_luxury",
-    preference: "no loud logos",
+    occasion: "",
+    weather: "",
+    vibe: "",
+    preference: "",
   });
 
-  const [recommendation, setRecommendation] = useState<RecommendOutfitResponse | null>(mockRecommendation);
-  const [purchase, setPurchase] = useState<PurchaseAnalysisResponse | null>(mockPurchase);
-  const [script, setScript] = useState<GenerateScriptResponse | null>(mockScript);
-  const [video, setVideo] = useState<GenerateVideoResponse | null>(mockVideo);
+  const [recommendation, setRecommendation] = useState<RecommendOutfitResponse | null>(null);
+  const [purchase, setPurchase] = useState<PurchaseAnalysisResponse | null>(null);
+  const [script, setScript] = useState<GenerateScriptResponse | null>(null);
+  const [video, setVideo] = useState<GenerateVideoResponse | null>(null);
+  const [faceAnchorPath, setFaceAnchorPath] = useState<string | null>(null);
 
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
@@ -37,7 +41,22 @@ export default function App() {
   const setBusyKey = (k: string, v: boolean) => setBusy((p) => ({ ...p, [k]: v }));
   const setErr = (k: string, v: string | null) => setErrors((p) => ({ ...p, [k]: v }));
 
-  const wardrobeIds = useMemo(() => wardrobe.map((g) => g.id), [wardrobe]);
+  const wardrobe = useMemo(() => [...serverWardrobe, ...localWardrobe], [serverWardrobe, localWardrobe]);
+  const serverWardrobeIds = useMemo(() => serverWardrobe.map((g) => g.id), [serverWardrobe]);
+
+  const refreshServerWardrobe = async () => {
+    try {
+      const items = await apiGet<GarmentRecord[]>("/garments");
+      setServerWardrobe(items);
+    } catch {
+      // If server isn't reachable, keep whatever we have.
+    }
+  };
+
+  useEffect(() => {
+    void refreshServerWardrobe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const ingest = async (file: File, hints: string | undefined) => {
     setBusyKey("ingest", true);
@@ -47,7 +66,7 @@ export default function App() {
       fd.append("file", file);
       if (hints) fd.append("hints", hints);
       const res = await apiPostMultipart<{ garment: GarmentRecord }>("/ingest-garment", fd);
-      setWardrobe((w) => [...w, res.garment]);
+      setServerWardrobe((w) => [...w, res.garment]);
     } catch (e) {
       // Quiet fallback: still add a local placeholder so the flow continues.
       const next: GarmentRecord = {
@@ -60,10 +79,29 @@ export default function App() {
         image_path: `uploads/${file.name}`,
         embedding: [],
       };
-      setWardrobe((w) => [...w, next]);
+      setLocalWardrobe((w) => [...w, next]);
       setErr("ingest", e instanceof ApiError ? "Couldn’t reach the server. Saved locally for the demo." : "Saved locally for the demo.");
     } finally {
       setBusyKey("ingest", false);
+    }
+  };
+
+  const removeGarment = async (id: string) => {
+    setBusyKey("delete", true);
+    setErr("ingest", null);
+    try {
+      if (!id.startsWith("local-")) {
+        await apiDelete(`/garments/${id}`);
+      }
+    } catch {
+      // If backend isn't reachable, still remove locally for demo control.
+    } finally {
+      if (id.startsWith("local-")) {
+        setLocalWardrobe((w) => w.filter((g) => g.id !== id));
+      } else {
+        setServerWardrobe((w) => w.filter((g) => g.id !== id));
+      }
+      setBusyKey("delete", false);
     }
   };
 
@@ -71,12 +109,16 @@ export default function App() {
     setBusyKey("rec", true);
     setErr("rec", null);
     try {
+      const occasion = context.occasion.trim() || "work_presentation";
+      const weather = context.weather.trim() || "mild_clear";
+      const vibe = context.vibe.trim() || "quiet_luxury";
+      const preference = context.preference.trim();
       const res = await apiPostJson<RecommendOutfitResponse>("/recommend-outfit", {
-        occasion: context.occasion,
-        weather: context.weather,
-        vibe: context.vibe,
-        wardrobe_item_ids: wardrobeIds,
-        user_preference: context.preference || null,
+        occasion,
+        weather,
+        vibe,
+        wardrobe_item_ids: serverWardrobeIds,
+        user_preference: preference.length ? preference : null,
       });
       setRecommendation(res);
     } catch (e) {
@@ -93,7 +135,7 @@ export default function App() {
     try {
       const res = await apiPostJson<PurchaseAnalysisResponse>("/analyze-purchase", {
         candidate,
-        wardrobe_item_ids: wardrobeIds,
+        wardrobe_item_ids: serverWardrobeIds,
       });
       setPurchase(res);
     } catch (e) {
@@ -104,7 +146,23 @@ export default function App() {
     }
   };
 
-  const genScript = async (platform: "linkedin" | "dating" | "tiktok") => {
+  const ingestCandidate = async (file: File, hints: string | undefined) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (hints) fd.append("hints", hints);
+    const res = await apiPostMultipart<{ garment: GarmentRecord }>("/ingest-garment", fd);
+    return res.garment;
+  };
+
+  const cleanupCandidate = async (id: string) => {
+    try {
+      await apiDelete(`/garments/${id}`);
+    } catch {
+      // ignore
+    }
+  };
+
+  const genScript = async (platform: "linkedin" | "instagram" | "tiktok") => {
     setBusyKey("scr", true);
     setErr("scr", null);
     const outfit_summary =
@@ -129,10 +187,19 @@ export default function App() {
     setBusyKey("vid", true);
     setErr("vid", null);
     try {
+      if (!recommendation || recommendation.garments.length === 0) {
+        setErr("vid", "Pick an outfit first (from Style or Buy Analyzer), then generate a preview.");
+        return;
+      }
+      const outfit_summary = recommendation.garments.map((g) => `${g.color} ${g.category}`).join(", ");
+      const anchors = recommendation.garments
+        .map((g) => g.image_path)
+        .filter((p) => typeof p === "string" && p.startsWith("uploads/"));
       const res = await apiPostJson<GenerateVideoResponse>("/generate-video", {
-        scene_prompt: "Runway walk-through with natural light and slow pan.",
-        anchor_image_paths: [],
-        duration_seconds: 5,
+        scene_prompt: `Outfit: ${outfit_summary}. Runway walk-through with natural light and slow pan.`,
+        anchor_image_paths: anchors,
+        face_anchor_image_path: faceAnchorPath,
+        duration_seconds: 30,
       });
       setVideo(res);
     } catch (e) {
@@ -143,42 +210,83 @@ export default function App() {
     }
   };
 
+  const uploadFaceAnchor = async (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("kind", "face");
+    const res = await apiPostMultipart<{ path: string }>("/upload-anchor", fd);
+    setFaceAnchorPath(res.path);
+  };
+
   return (
-    <AppShell route={route} onRoute={setRoute}>
-      {route === "wardrobe" ? (
-        <WardrobePage wardrobe={wardrobe} busy={!!busy.ingest} error={errors.ingest} onIngest={ingest} />
-      ) : null}
-      {route === "style" ? (
-        <StylePage
-          context={context}
-          onChange={setContext}
-          onRecommend={recommend}
-          busy={!!busy.rec}
-          error={errors.rec}
-          recommendation={recommendation}
-        />
-      ) : null}
-      {route === "buy" ? (
-        <BuyAnalyzerPage
-          wardrobe={wardrobe}
-          busy={!!busy.pur}
-          error={errors.pur}
-          result={purchase}
-          onAnalyze={analyze}
-        />
-      ) : null}
-      {route === "content" ? (
-        <ContentPage
-          recommendation={recommendation}
-          script={script}
-          video={video}
-          scriptBusy={!!busy.scr}
-          videoBusy={!!busy.vid}
-          onGenerateScript={genScript}
-          onGenerateVideo={genVideo}
-        />
-      ) : null}
-      {route === "chat" ? <ChatPage recommendation={recommendation} /> : null}
-    </AppShell>
+    <ImageLightboxProvider>
+      <AppShell route={route} onRoute={setRoute}>
+        {route === "home" ? <HomePage onGoWardrobe={() => setRoute("wardrobe")} /> : null}
+        {route === "wardrobe" ? (
+          <WardrobePage
+            wardrobe={wardrobe}
+            busy={!!busy.ingest || !!busy.delete}
+            error={errors.ingest}
+            onIngest={ingest}
+            onDelete={removeGarment}
+            onNext={() => setRoute("style")}
+          />
+        ) : null}
+        {route === "style" ? (
+          <StylePage
+            context={context}
+            onChange={setContext}
+            onRecommend={recommend}
+            onUseOutfit={(outfit) => {
+              setRecommendation(outfit);
+              setRoute("content");
+            }}
+            busy={!!busy.rec}
+            error={errors.rec}
+            recommendation={recommendation}
+          />
+        ) : null}
+        {route === "buy" ? (
+          <BuyAnalyzerPage
+            wardrobe={wardrobe}
+            busy={!!busy.pur}
+            error={errors.pur}
+            result={purchase}
+            onAnalyze={analyze}
+            onUseCombo={({ title, garmentIds, occasion, description }) => {
+              const garments = garmentIds
+                .map((id) => wardrobe.find((g) => g.id === id))
+                .filter(Boolean) as GarmentRecord[];
+              const rec = {
+                outfit_items: garmentIds.map((id) => ({ garment_id: id, role: "piece" })),
+                garments,
+                explanation: description ? `${title}. ${description}` : title,
+                confidence: 0.62,
+                retrieved_style_rule_ids: [],
+                used_live_agent: false,
+              };
+              setRecommendation(rec);
+              setRoute("content");
+            }}
+            onIngestCandidate={ingestCandidate}
+            onCleanupCandidate={cleanupCandidate}
+          />
+        ) : null}
+        {route === "content" ? (
+          <ContentPage
+            recommendation={recommendation}
+            script={script}
+            video={video}
+            scriptBusy={!!busy.scr}
+            videoBusy={!!busy.vid}
+            faceAnchorPath={faceAnchorPath}
+            onUploadFaceAnchor={uploadFaceAnchor}
+            onGenerateScript={genScript}
+            onGenerateVideo={genVideo}
+          />
+        ) : null}
+      </AppShell>
+      <ChatWidget recommendation={recommendation} />
+    </ImageLightboxProvider>
   );
 }

@@ -80,6 +80,10 @@ class BuyNoBuyEngine:
                 top_matching_existing_items=[],
             )
 
+        # Formality alignment: compatibility is higher when candidate sits near the wardrobe's center of gravity.
+        avg_formality = sum(float(g.formality_score) for g in wardrobe) / max(1, len(wardrobe))
+        formality_match = 1.0 - min(1.0, abs(float(candidate.formality_score) - avg_formality))  # 0..1
+
         # Similarity profile (high similarity = compatibility, but *too* high can mean redundancy)
         sims: list[tuple[float, GarmentRecord]] = []
         for g in wardrobe:
@@ -110,30 +114,89 @@ class BuyNoBuyEngine:
         pair_threshold = 0.35
         pair_edges = [g for s, g in sims if s >= pair_threshold]
         cross_cat_edges = [g for s, g in sims if s >= pair_threshold and str(g.category).lower() != str(candidate.category).lower()]
-        est_combos = int(min(20, max(0, len(cross_cat_edges) * 2 + (1 if len(pair_edges) >= 6 else 0))))
+        est_combos_sim = int(min(20, max(0, len(cross_cat_edges) * 2 + (1 if len(pair_edges) >= 6 else 0))))
+
+        # Also estimate combinations from wardrobe coverage so the number is intuitive in demos
+        # even when embeddings are low-signal.
+        cat_counts: dict[str, int] = {}
+        for g in wardrobe:
+            cat_counts[str(g.category).lower()] = cat_counts.get(str(g.category).lower(), 0) + 1
+        tops = cat_counts.get("top", 0)
+        bottoms = cat_counts.get("bottom", 0)
+        shoes = cat_counts.get("shoes", 0)
+        cand_cat = str(candidate.category).lower()
+        if cand_cat == "shoes":
+            est_combos_struct = int(min(12, max(1, (tops + bottoms) // 2)))
+        elif cand_cat == "top":
+            est_combos_struct = int(min(12, max(1, (bottoms + shoes) // 2)))
+        elif cand_cat == "bottom":
+            est_combos_struct = int(min(12, max(1, (tops + shoes) // 2)))
+        elif cand_cat == "outerwear":
+            est_combos_struct = int(min(8, max(1, (tops + bottoms) // 3)))
+        else:
+            est_combos_struct = int(min(6, max(1, (tops + bottoms + shoes) // 4)))
+
+        est_combos = int(max(est_combos_sim, est_combos_struct))
+
+        # Make "outfit potential" respond to formality in a predictable way:
+        # best when formality matches the wardrobe average; lower when it's far off.
+        # multiplier in [0.6, 1.4], peaking at match=1.0.
+        combo_multiplier = 0.6 + 0.8 * float(formality_match)
+        est_combos = int(max(1, min(20, round(est_combos * combo_multiplier))))
 
         # Scores (0-100)
-        compat = _clamp_int((mean_top3 * self.similarity_weight) + (complement * self.complementarity_weight) + 20.0)
+        # Add a small, predictable formality term so user adjustments have a visible effect.
+        formality_term = (formality_match - 0.5) * 18.0  # [-9, +9]
+        compat = _clamp_int(
+            (mean_top3 * self.similarity_weight) + (complement * self.complementarity_weight) + 20.0 + formality_term
+        )
         versatility = _clamp_int(
             (len({str(g.category).lower() for g in cross_cat_edges}) / 4.0) * 60.0
             + (complement * 25.0)
             + _season_bonus(candidate.season, context_season)
             + 10.0
+            + (formality_match - 0.5) * 10.0
         )
         redundancy = _clamp_int((same_cat_max * self.redundancy_penalty_weight) + (max_sim * 35.0))
 
-        # Recommendation decision
-        if compat >= 70 and versatility >= 60 and redundancy <= 55 and est_combos >= 4:
-            rec: Decision = "BUY"
-        elif redundancy >= 75 or est_combos <= 1:
+        # Recommendation decision (score-based to avoid "always MAYBE"):
+        #
+        # We compute a single purchase score from:
+        # - compatibility (higher = better)
+        # - versatility (higher = better)
+        # - redundancy (lower = better)
+        # - outfit potential (diminishing returns)
+        #
+        # Then map score -> BUY/MAYBE/NO_BUY with a couple safety gates.
+        # Outfit potential should meaningfully move the verdict in a demo.
+        # Use diminishing returns so the score doesn't blow up.
+        combo_bonus = (min(12.0, float(est_combos)) ** 0.85) * 6.0  # ~0..~44
+        purchase_score = (
+            0.42 * float(compat)
+            + 0.33 * float(versatility)
+            + 0.25 * float(100 - redundancy)
+            + combo_bonus
+        )  # ~0..~144
+
+        # Safety gates
+        if redundancy >= 95:
+            rec: Decision = "NO_BUY"
+        # Strong pairing potential should generally qualify as BUY unless redundancy is notable.
+        elif est_combos >= 10 and redundancy <= 80:
+            rec = "BUY"
+        # High potential + not redundant should become BUY more often.
+        elif purchase_score >= 82 and redundancy <= 78 and est_combos >= 5:
+            rec = "BUY"
+        # Reserve NO_BUY for low score AND low potential (or very weak fit).
+        elif purchase_score <= 66 and (est_combos <= 2 or compat <= 40):
             rec = "NO_BUY"
         else:
             rec = "MAYBE"
 
         explanation = (
             f"compat={compat}/100, versatility={versatility}/100, redundancy={redundancy}/100, "
-            f"new_combos≈{est_combos}. Top similarity={max_sim:.2f}, top-3 mean={mean_top3:.2f}. "
-            f"Decision favors BUY when cross-category pairing coverage is strong without heavy same-category overlap."
+            f"new_combos≈{est_combos}, score={purchase_score:.1f}. "
+            f"Top similarity={max_sim:.2f}, top-3 mean={mean_top3:.2f}."
         )
 
         return BuyNoBuyResult(

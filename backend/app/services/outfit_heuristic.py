@@ -65,16 +65,36 @@ def recommend_outfit_deterministic(
         resolved[outw.id] = outw
 
     garments = list(resolved.values())
-    formality_spread = max((g.formality_score for g in garments), default=0.5) - min(
-        (g.formality_score for g in garments), default=0.5
-    )
-    confidence = float(max(0.35, min(0.95, 0.72 - formality_spread)))
+    # Confidence should reflect: context match, category coverage, and weather suitability.
+    q = deterministic_embedding((occasion, weather, vibe, user_preference or ""))
+    sims = [cosine_similarity(q, g.embedding) for g in garments if g.embedding]
+    sim_score = (sum(sims) / len(sims)) if sims else 0.0  # [-1, 1] but deterministic embeddings tend positive
+    sim_score = max(-1.0, min(1.0, float(sim_score)))
 
-    explanation = (
-        f"Selected pieces for '{occasion}' under '{weather}' with '{vibe}' vibe. "
-        f"Grounded rules: {', '.join(rule_ids)}. "
-        f"{(user_preference + ' ') if user_preference else ''}"
-    ).strip()
+    coverage = 0.0
+    coverage += 1.0 if top else 0.0
+    coverage += 1.0 if bottom else 0.0
+    coverage += 1.0 if shoe else 0.0
+    coverage_score = coverage / 3.0  # [0, 1]
+
+    w = weather.lower()
+    needs_outer = ("cold" in w) or ("rain" in w) or ("snow" in w) or ("wind" in w)
+    has_outer = any(g.category.lower() == "outerwear" for g in garments)
+    weather_score = 1.0
+    if needs_outer and not has_outer:
+        weather_score = 0.65
+    if (("rain" in w) or ("snow" in w)) and not shoe:
+        weather_score *= 0.85
+
+    # Map similarity from [-1, 1] to [0, 1], then blend.
+    sim_0_1 = (sim_score + 1.0) / 2.0
+    blended = (0.55 * sim_0_1) + (0.30 * coverage_score) + (0.15 * weather_score)
+    confidence = float(max(0.25, min(0.95, blended)))
+
+    pref = user_preference.strip() if user_preference else ""
+    explanation = f"Selected pieces for '{occasion}' in '{weather}' with a '{vibe}' vibe."
+    if pref:
+        explanation = f"{explanation} Preference: {pref}."
 
     return RecommendOutfitResponse(
         outfit_items=refs,

@@ -17,6 +17,14 @@ class AnalyzePurchaseRequest(BaseModel):
     wardrobe_item_ids: list[str] = Field(default_factory=list)
 
 
+class OutfitSuggestion(BaseModel):
+    title: str
+    occasion: str | None = None
+    description: str | None = None
+    garment_ids: list[str] = Field(default_factory=list, description="Wardrobe garment IDs to pair with the candidate")
+    reason: str | None = None
+
+
 class PurchaseAnalysisResponse(BaseModel):
     # Legacy MVP fields (kept for frontend compatibility)
     compatibility_score: float = Field(..., ge=0.0, le=1.0, description="0..1 legacy compatibility")
@@ -28,6 +36,8 @@ class PurchaseAnalysisResponse(BaseModel):
     redundancy_score_0_100: int | None = Field(default=None, ge=0, le=100)
     estimated_new_combinations: int | None = Field(default=None, ge=0)
     top_matching_existing_items: list[str] = Field(default_factory=list)
+    outfit_suggestions: list[OutfitSuggestion] = Field(default_factory=list)
+    decision_criteria: list[str] = Field(default_factory=list)
     recommendation: Literal["BUY", "NO_BUY", "MAYBE"]
     explanation: str
     rationale_bullets: list[str] = Field(default_factory=list)

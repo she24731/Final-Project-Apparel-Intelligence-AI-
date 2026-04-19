@@ -11,9 +11,9 @@ export function NarrativeScriptPanel({
   recommendation: RecommendOutfitResponse | null;
   script: GenerateScriptResponse | null;
   busy: boolean;
-  onGenerate: (platform: "linkedin" | "dating" | "tiktok") => Promise<void>;
+  onGenerate: (platform: "linkedin" | "instagram" | "tiktok") => Promise<void>;
 }) {
-  const [platform, setPlatform] = useState<"linkedin" | "dating" | "tiktok">("linkedin");
+  const [platform, setPlatform] = useState<"linkedin" | "instagram" | "tiktok">("linkedin");
 
   const summary =
     recommendation?.garments.map((g) => `${g.color} ${g.category}`).join(", ") ??
@@ -30,7 +30,7 @@ export function NarrativeScriptPanel({
             className="ml-2 rounded-lg border border-line bg-ink-950 px-2 py-1 text-sm text-mist"
           >
             <option value="linkedin">LinkedIn</option>
-            <option value="dating">Dating</option>
+            <option value="instagram">Instagram</option>
             <option value="tiktok">TikTok</option>
           </select>
         </label>

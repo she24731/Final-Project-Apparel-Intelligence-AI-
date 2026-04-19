@@ -4,10 +4,17 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from app.agents.orchestrator import ingest_garment_with_optional_agent
 from app.schemas.wardrobe import IngestGarmentResponse
+from app.schemas.wardrobe import GarmentRecord
 from app.retrieval.service import get_retrieval_service
 from app.services.store import get_store
 
 router = APIRouter(tags=["wardrobe"])
+
+
+@router.get("/garments", response_model=list[GarmentRecord])
+async def list_garments() -> list[GarmentRecord]:
+    """Return the current server-side wardrobe items."""
+    return get_store().all()
 
 
 @router.post("/ingest-garment", response_model=IngestGarmentResponse)
@@ -28,6 +35,13 @@ async def ingest_garment(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
+    # Demo-friendly: accept common images including iPhone HEIC/HEIF.
+    # Reject only clearly non-image uploads.
+    if file.content_type and not file.content_type.lower().startswith("image/"):
+        raise HTTPException(status_code=415, detail="Unsupported file type. Please upload an image file.")
+    max_mb = 10
+    if len(content) > max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large. Max size is {max_mb}MB.")
     dest.write_bytes(content)
     rel_path = f"uploads/{safe_name}"
 
@@ -36,3 +50,27 @@ async def ingest_garment(
     # Keep retrieval index warm for demo responsiveness
     get_retrieval_service().ingest_wardrobe(get_store().all())
     return resp
+
+
+@router.delete("/garments/{garment_id}")
+async def delete_garment(garment_id: str) -> dict[str, str]:
+    from app.config import get_settings
+
+    settings = get_settings()
+    store = get_store()
+    deleted = store.delete(garment_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Garment not found")
+
+    # Best-effort delete file on disk (if it lives under uploads/)
+    try:
+        if deleted.image_path.startswith("uploads/"):
+            fname = deleted.image_path.split("/", 1)[1]
+            p = settings.uploads_dir / fname
+            if p.exists():
+                p.unlink()
+    except Exception:
+        pass
+
+    get_retrieval_service().ingest_wardrobe(store.all())
+    return {"status": "deleted", "id": garment_id}

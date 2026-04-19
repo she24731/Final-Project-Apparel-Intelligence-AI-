@@ -35,6 +35,8 @@ export interface PurchaseAnalysisResponse {
   redundancy_score_0_100?: number | null;
   estimated_new_combinations?: number | null;
   top_matching_existing_items?: string[];
+  outfit_suggestions?: { title: string; occasion?: string | null; description?: string | null; garment_ids: string[]; reason?: string | null }[];
+  decision_criteria?: string[];
   recommendation: PurchaseRecommendation;
   explanation: string;
   rationale_bullets: string[];
@@ -53,6 +55,9 @@ export interface GenerateVideoResponse {
   preview_message: string;
   video_url: string | null;
   provider: string;
+  description?: string | null;
+  narration_text?: string | null;
+  video_prompt?: string | null;
 }
 
 export interface ChatTurn {

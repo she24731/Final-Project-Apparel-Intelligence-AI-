@@ -30,6 +30,10 @@ class InMemoryWardrobeStore:
                     out.append(g)
         return out
 
+    def delete(self, garment_id: str) -> GarmentRecord | None:
+        with self._lock:
+            return self._items.pop(garment_id, None)
+
     def all(self) -> list[GarmentRecord]:
         with self._lock:
             return list(self._items.values())
