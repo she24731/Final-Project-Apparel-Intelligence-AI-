@@ -1,0 +1,12 @@
+.DS_Store
+.env
+.venv
+node_modules
+dist
+__pycache__/
+*.pyc
+generated_media/
+backend/.venv/
+backend/data/uploads/
+frontend/node_modules/
+frontend/dist/
