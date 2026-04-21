@@ -255,10 +255,6 @@ export default function App() {
     setBusyKey("vid", true);
     setErr("vid", null);
     try {
-      if (!recommendation || recommendation.garments.length === 0) {
-        setErr("vid", "Pick an outfit first (from Style or Buy Analyzer), then generate a preview.");
-        return;
-      }
       const res = await apiPostJson<GenerateVideoResponse>("/generate-video", body);
       setVideo(res);
     } catch (e) {

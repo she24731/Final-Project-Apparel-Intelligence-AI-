@@ -161,7 +161,18 @@ export function RunwayReelPreviewPanel({
   };
 
   const runRender = async () => {
-    if (!scenePrompt.trim()) return;
+    if (!scenePrompt.trim()) {
+      setCopyErr('Please enter a “Movie idea” first (one sentence: concept + vibe).');
+      return;
+    }
+    if (!faceAnchorPath) {
+      setCopyErr("Please upload a face anchor selfie first (required for FMV).");
+      return;
+    }
+    if (!wardrobeAnchors.length) {
+      setCopyErr("Pick an outfit first (Style → Recommend outfit), so we have garment anchors.");
+      return;
+    }
     const scenePayload: ReelVideoScenePayload[] | undefined =
       scenes.length > 0
         ? scenes.map((s) => ({
@@ -178,6 +189,7 @@ export function RunwayReelPreviewPanel({
       face_anchor_image_path: faceAnchorPath,
       duration_seconds: 30,
       background_music_path: musicPath,
+      require_fmv: true,
       scenes: scenePayload,
     });
   };
@@ -193,7 +205,7 @@ export function RunwayReelPreviewPanel({
         <div className="flex flex-wrap justify-end gap-2">
           <button
             type="button"
-            disabled={busy || copyBusy || !recommendation}
+            disabled={busy || copyBusy}
             onClick={() => void runGenerateScenes()}
             className="rounded-lg border border-line bg-ink-950 px-3 py-1.5 text-xs font-semibold text-mist hover:border-accent/50 disabled:opacity-40"
           >
@@ -201,7 +213,7 @@ export function RunwayReelPreviewPanel({
           </button>
           <button
             type="button"
-            disabled={busy || !recommendation}
+            disabled={busy}
             onClick={() => void runRender()}
             className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-mist hover:bg-accent/20 disabled:opacity-40"
           >
@@ -352,9 +364,11 @@ export function RunwayReelPreviewPanel({
           <div className="space-y-3">
             <div className="flex items-baseline justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent/90">Scenes for ~30s reel</p>
-              <p className="text-[11px] text-mist/45">{scenes.length} shot{scenes.length === 1 ? "" : "s"} · edit each beat, then render</p>
+              <p className="text-[11px] text-mist/45">
+                Showing {Math.min(5, scenes.length)} of {scenes.length} shot{scenes.length === 1 ? "" : "s"} · edit beats, then render
+              </p>
             </div>
-            {scenes.map((s, idx) => (
+            {scenes.slice(0, 5).map((s, idx) => (
               <div
                 key={`${s.anchor_image_path ?? "x"}-${idx}`}
                 className="rounded-2xl border border-accent/20 bg-ink-950/40 p-4"
