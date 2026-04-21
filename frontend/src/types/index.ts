@@ -59,17 +59,39 @@ export interface GenerateScriptRequestBody {
   target_audience?: string | null;
   scenario?: string | null;
   vibe?: string | null;
+  /** Optional per-click salt to force draft variation (no UI change). */
+  variation_salt?: string | null;
 }
 
 export interface ReelSceneDraft {
   anchor_image_path: string | null;
+  anchor_type?: "face" | "wardrobe" | "none";
+  label?: string;
+  duration_seconds?: number;
   description: string;
-  narration: string;
+  generated_image_path?: string | null;
+  generated_video_path?: string | null;
+}
+
+export interface ReelVideoScenePayload {
+  anchor_image_path: string | null;
+  render_image_path?: string | null;
+  anchor_type: "face" | "wardrobe" | "none";
+  description: string;
+  duration_seconds: number;
+}
+
+/** Body for `/preview-reel-copy` and `/generate-scenes` (and as a base for `/generate-scene-assets`). */
+export interface PreviewReelCopyRequestBody {
+  scene_prompt: string;
+  anchor_image_paths: string[];
+  face_anchor_path: string | null;
+  duration_seconds: number;
+  face_anchor_present: boolean;
 }
 
 export interface PreviewReelCopyResponse {
   description: string;
-  narration_text: string;
   video_prompt: string;
   scenes: ReelSceneDraft[];
 }
@@ -79,7 +101,10 @@ export interface GenerateVideoRequestBody {
   anchor_image_paths: string[];
   duration_seconds: number;
   face_anchor_image_path: string | null;
-  narration_text: string | null;
+  background_music_path?: string | null;
+  require_fmv?: boolean;
+  /** When set, backend renders one Veo clip per scene and stitches into one MP4. */
+  scenes?: ReelVideoScenePayload[];
 }
 
 export interface SocialPostPrepareResponse {
@@ -98,7 +123,6 @@ export interface GenerateVideoResponse {
   video_url: string | null;
   provider: string;
   description?: string | null;
-  narration_text?: string | null;
   video_prompt?: string | null;
 }
 
@@ -108,6 +132,7 @@ export interface AssistantTurnResponse {
   recommendation?: RecommendOutfitResponse | null;
   script?: GenerateScriptResponse | null;
   video?: GenerateVideoResponse | null;
+  updated_context?: ChatContextPayload | null;
 }
 
 export interface ChatContextPayload {

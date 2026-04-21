@@ -7,6 +7,7 @@ from app.schemas.wardrobe import IngestGarmentResponse
 from app.schemas.wardrobe import GarmentRecord
 from app.retrieval.service import get_retrieval_service
 from app.services.store import get_store
+from app.utils.image_upload import looks_like_image_upload
 
 router = APIRouter(tags=["wardrobe"])
 
@@ -37,8 +38,11 @@ async def ingest_garment(
         raise HTTPException(status_code=400, detail="Empty file")
     # Demo-friendly: accept common images including iPhone HEIC/HEIF.
     # Reject only clearly non-image uploads.
-    if file.content_type and not file.content_type.lower().startswith("image/"):
-        raise HTTPException(status_code=415, detail="Unsupported file type. Please upload an image file.")
+    if not looks_like_image_upload(filename=file.filename, content_type=file.content_type):
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported file type. Please upload an image file (JPG, PNG, WebP, HEIC, etc.).",
+        )
     max_mb = 10
     if len(content) > max_mb * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large. Max size is {max_mb}MB.")
@@ -74,3 +78,32 @@ async def delete_garment(garment_id: str) -> dict[str, str]:
 
     get_retrieval_service().ingest_wardrobe(store.all())
     return {"status": "deleted", "id": garment_id}
+
+
+@router.delete("/garments")
+async def delete_all_garments() -> dict[str, int]:
+    """
+    Delete all garments in the server wardrobe.
+    Intended for demo UX when users upload hundreds of photos.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+    store = get_store()
+    deleted = store.clear()
+    removed_files = 0
+
+    # Best-effort delete each uploaded file referenced by garments.
+    for g in deleted:
+        try:
+            if g.image_path.startswith("uploads/"):
+                fname = g.image_path.split("/", 1)[1]
+                p = settings.uploads_dir / fname
+                if p.exists():
+                    p.unlink()
+                    removed_files += 1
+        except Exception:
+            pass
+
+    get_retrieval_service().ingest_wardrobe(store.all())
+    return {"deleted_count": len(deleted), "removed_files": removed_files}

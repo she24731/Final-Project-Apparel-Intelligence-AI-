@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, type AppRoute } from "@/components/layout/AppShell";
 import { ChatWidget } from "@/components/ChatWidget";
 import { ImageLightboxProvider } from "@/components/ui/ImageLightbox";
@@ -35,8 +35,40 @@ export default function App() {
   const [recommendation, setRecommendation] = useState<RecommendOutfitResponse | null>(null);
   const [purchase, setPurchase] = useState<PurchaseAnalysisResponse | null>(null);
   const [script, setScript] = useState<GenerateScriptResponse | null>(null);
+  const lastScriptTextRef = useRef<string>("");
   const [video, setVideo] = useState<GenerateVideoResponse | null>(null);
   const [faceAnchorPath, setFaceAnchorPath] = useState<string | null>(null);
+
+  // Persist key “Simulation” outputs across route toggles (without page refresh).
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("apparel_sim_persist");
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        video?: GenerateVideoResponse | null;
+        faceAnchorPath?: string | null;
+      };
+      if (parsed.video) setVideo(parsed.video);
+      if (typeof parsed.faceAnchorPath !== "undefined") setFaceAnchorPath(parsed.faceAnchorPath ?? null);
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        "apparel_sim_persist",
+        JSON.stringify({
+          video,
+          faceAnchorPath,
+        }),
+      );
+    } catch {
+      // ignore
+    }
+  }, [video, faceAnchorPath]);
 
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
@@ -56,15 +88,16 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    void refreshServerWardrobe();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // NOTE: For this project demo, we keep the wardrobe session-scoped.
+  // That means on refresh we start with an empty "Your wardrobe" list, even if the backend
+  // still has previously ingested garments. (We do not delete server data here.)
 
   const ingest = async (file: File, hints: string | undefined) => {
     setBusyKey("ingest", true);
     setErr("ingest", null);
     try {
+      // New wardrobe input invalidates any old recommendation.
+      setRecommendation(null);
       const fd = new FormData();
       fd.append("file", file);
       if (hints) fd.append("hints", hints);
@@ -105,6 +138,31 @@ export default function App() {
         setServerWardrobe((w) => w.filter((g) => g.id !== id));
       }
       setBusyKey("delete", false);
+    }
+  };
+
+  const removeAllGarments = async () => {
+    if (wardrobe.length === 0) return;
+    const ok = window.confirm(
+      `Remove all ${wardrobe.length} item${wardrobe.length === 1 ? "" : "s"} from your wardrobe? This can’t be undone.`,
+    );
+    if (!ok) return;
+
+    setBusyKey("delete_all", true);
+    setErr("ingest", null);
+    try {
+      setRecommendation(null);
+      // Server-side bulk delete (fast for large wardrobes).
+      await apiDelete("/garments");
+      setServerWardrobe([]);
+      setLocalWardrobe([]);
+    } catch {
+      // If backend isn't reachable, still clear local state for demo control.
+      setServerWardrobe([]);
+      setLocalWardrobe([]);
+      setErr("ingest", "Cleared locally. Couldn’t reach the server to delete remote items.");
+    } finally {
+      setBusyKey("delete_all", false);
     }
   };
 
@@ -169,8 +227,22 @@ export default function App() {
     setBusyKey("scr", true);
     setErr("scr", null);
     try {
+      const prev = lastScriptTextRef.current.trim();
       const res = await apiPostJson<GenerateScriptResponse>("/generate-script", body);
-      setScript(res);
+      const nextText = (res?.script ?? "").trim();
+      // Guarantee consecutive clicks don't show identical copy: if the backend repeats,
+      // do one fast retry with a fresh salt (UI stays the same).
+      if (prev && nextText && nextText === prev) {
+        const retry = await apiPostJson<GenerateScriptResponse>("/generate-script", {
+          ...body,
+          variation_salt: typeof crypto !== "undefined" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+        });
+        lastScriptTextRef.current = (retry?.script ?? "").trim();
+        setScript(retry);
+      } else {
+        lastScriptTextRef.current = nextText;
+        setScript(res);
+      }
     } catch (e) {
       setErr("scr", "Couldn’t generate live copy. Showing a demo script.");
       setScript(mockScript);
@@ -212,11 +284,13 @@ export default function App() {
         {route === "wardrobe" ? (
           <WardrobePage
             wardrobe={wardrobe}
-            busy={!!busy.ingest || !!busy.delete}
+            busy={!!busy.ingest || !!busy.delete || !!busy.delete_all}
             error={errors.ingest}
             onIngest={ingest}
             onDelete={removeGarment}
+            onRemoveAll={removeAllGarments}
             onNext={() => setRoute("style")}
+            onGoBuyAnalyzer={() => setRoute("buy")}
           />
         ) : null}
         {route === "style" ? (
@@ -288,6 +362,9 @@ export default function App() {
           if (res.recommendation) setRecommendation(res.recommendation);
           if (res.script) setScript(res.script);
           if (res.video) setVideo(res.video);
+          if (res.updated_context?.face_anchor_path) setFaceAnchorPath(res.updated_context.face_anchor_path);
+          // If the assistant ingested wardrobe items via chat attachments, refresh from server.
+          if (res.updated_context?.wardrobe_item_ids?.length) void refreshServerWardrobe();
         }}
       />
     </ImageLightboxProvider>

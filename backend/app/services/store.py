@@ -38,6 +38,13 @@ class InMemoryWardrobeStore:
         with self._lock:
             return list(self._items.values())
 
+    def clear(self) -> list[GarmentRecord]:
+        """Remove and return all garments."""
+        with self._lock:
+            items = list(self._items.values())
+            self._items.clear()
+            return items
+
 
 _store = InMemoryWardrobeStore()
 

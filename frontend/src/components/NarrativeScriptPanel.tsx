@@ -50,7 +50,11 @@ export function NarrativeScriptPanel({
   };
 
   const preparePost = async (target: "linkedin" | "instagram" | "tiktok") => {
-    if (!script) return;
+    if (!script) {
+      setShareBusy("Generate a script first");
+      setTimeout(() => setShareBusy(null), 1600);
+      return;
+    }
     setShareBusy(target);
     try {
       const res = await apiPostJson<SocialPostPrepareResponse>("/social/prepare-post", {
@@ -110,6 +114,7 @@ export function NarrativeScriptPanel({
               target_audience: targetAudience.trim() || null,
               scenario: scenario.trim() || null,
               vibe: vibe.trim() || null,
+              variation_salt: typeof crypto !== "undefined" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
             })
           }
           className="rounded-xl bg-ink-950 px-4 py-2 text-sm font-semibold text-mist ring-1 ring-line hover:ring-accent/40 disabled:opacity-40"

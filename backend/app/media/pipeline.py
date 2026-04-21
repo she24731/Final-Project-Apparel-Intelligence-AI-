@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-import re
+from typing import Literal
 
 from app.schemas.media import GenerateVideoRequest, GenerateVideoResponse
 from app.schemas.recommend import RecommendOutfitResponse
@@ -40,28 +39,10 @@ def build_storyboard(*, outfit: RecommendOutfitResponse | None, narrative: str, 
     return Storyboard(logline=logline, scene_texts=scenes)
 
 
-def _split_narration_for_anchors(full: str, n: int) -> list[str]:
-    """Split narration into n chunks without empty strings."""
-    text = full.strip()
-    if n <= 1:
-        return [text]
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-    if len(sentences) >= n:
-        # Bucket sentences evenly
-        buckets: list[list[str]] = [[] for _ in range(n)]
-        for i, s in enumerate(sentences):
-            buckets[i % n].append(s)
-        return [" ".join(b).strip() for b in buckets]
-    # Fallback: character slices
-    size = max(1, len(text) // n)
-    return [text[i * size : (i + 1) * size].strip() or text for i in range(n)]
-
-
 def build_anchor_scenes(
     *,
     anchor_paths: list[str],
     scene_prompt: str,
-    narration: str,
     face_anchor_path: str | None,
 ) -> list[ReelSceneDraft]:
     """
@@ -79,20 +60,25 @@ def build_anchor_scenes(
         return [
             ReelSceneDraft(
                 anchor_image_path=None,
+                anchor_type="none",
+                label="Scene 1/1",
+                duration_seconds=8,
                 description=scene_prompt[:280],
-                narration=narration,
             ),
         ]
 
-    narr_parts = _split_narration_for_anchors(narration, len(paths))
+    sec = max(4, min(8, 30 // max(len(paths), 1)))
     scenes: list[ReelSceneDraft] = []
     for i, p in enumerate(paths):
         label = p.split("/")[-1]
+        at: Literal["face", "wardrobe", "none"] = "face" if face_anchor_path and p == face_anchor_path else "wardrobe"
         scenes.append(
             ReelSceneDraft(
                 anchor_image_path=p,
+                anchor_type=at,
+                label=f"Scene {i + 1}/{len(paths)} — {label}",
+                duration_seconds=sec,
                 description=f"Scene {i + 1} — highlight {label}: {scene_prompt[:120].strip()}",
-                narration=narr_parts[i] if i < len(narr_parts) else narration,
             ),
         )
     return scenes
@@ -129,14 +115,22 @@ class PlaceholderProvider(MediaProvider):
         import uuid
 
         job_id = str(uuid.uuid4())
+        if req.scenes:
+            lines = "\n".join(f"— {s.description[:110]}…" for s in req.scenes[:8])
+            msg = (
+                f"Placeholder: {len(req.scenes)}-scene reel plan (~{req.duration_seconds}s). "
+                "Set MEDIA_PROVIDER=gemini_video + GEMINI_API_KEY for stitched MP4.\n"
+                f"{lines}"
+            )
+        else:
+            msg = "Placeholder runway reel (no provider)."
         return GenerateVideoResponse(
             status="mock",
             job_id=job_id,
-            preview_message="Placeholder runway reel (no provider).",
+            preview_message=msg,
             video_url=None,
             provider=self.name,
             description=prompts.storyboard.logline,
-            narration_text=req.narration_text,
             video_prompt=prompts.video_prompt,
         )
 
@@ -155,7 +149,6 @@ class GeminiStubProvider(MediaProvider):
         import uuid
 
         job_id = str(uuid.uuid4())
-        narration = req.narration_text or "Narration: (auto) clean silhouette, calm palette, confident walk."
         face = f"Face anchor: {req.face_anchor_image_path}" if req.face_anchor_image_path else "Face anchor: none"
         return GenerateVideoResponse(
             status="mock",
@@ -163,13 +156,11 @@ class GeminiStubProvider(MediaProvider):
             preview_message=(
                 "Gemini demo runway reel (no paid provider).\n"
                 f"{face}\n"
-                f"{narration}\n"
                 f"Video prompt: {prompts.video_prompt[:220]}…"
             ),
             video_url=None,
             provider=self.name,
             description=prompts.storyboard.logline,
-            narration_text=narration,
             video_prompt=prompts.video_prompt,
         )
 
@@ -201,7 +192,6 @@ class GeminiVeoProvider(MediaProvider):
                 video_url=None,
                 provider=self.name,
                 description=prompts.storyboard.logline,
-                narration_text=req.narration_text,
                 video_prompt=prompts.video_prompt,
             )
 
@@ -216,7 +206,6 @@ class GeminiVeoProvider(MediaProvider):
                 video_url=None,
                 provider=self.name,
                 description=prompts.storyboard.logline,
-                narration_text=req.narration_text,
                 video_prompt=prompts.video_prompt,
             )
 
@@ -231,67 +220,49 @@ class GeminiVeoProvider(MediaProvider):
         out_dir = settings.generated_media_dir
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Decide source anchor image for image-to-video (prefer selfie).
-        anchor_candidates = []
-        if req.face_anchor_image_path:
-            anchor_candidates.append(req.face_anchor_image_path)
-        anchor_candidates.extend(req.anchor_image_paths or [])
-        img_obj = None
-        if anchor_candidates:
-            p = anchor_candidates[0]
-            local = (settings.data_dir / p).resolve() if p.startswith("uploads/") or p.startswith("generated_media/") else (settings.data_dir / p).resolve()
-            if local.exists():
-                try:
-                    img_obj = types.Image.from_file(str(local))
-                except Exception:
-                    img_obj = None
-
         client = genai.Client(api_key=settings.gemini_api_key)
         model = settings.gemini_video_model
 
-        total = int(req.duration_seconds or 8)
-        clip_len = 8 if total >= 8 else max(2, total)
-        n = max(1, int((total + clip_len - 1) // clip_len))
-
-        prompt = prompts.video_prompt
-        if req.narration_text:
-            prompt = f"{prompt}\n\nVoiceover (for timing): {req.narration_text}"
+        def _local_image_path(p: str) -> Path:
+            return (
+                (settings.data_dir / p).resolve()
+                if p.startswith("uploads/") or p.startswith("generated_media/")
+                else (settings.data_dir / p).resolve()
+            )
 
         clip_paths: list[Path] = []
-        for i in range(n):
-            # Create operation
+
+        async def _one_veo_clip(
+            *,
+            clip_index: int,
+            prompt: str,
+            image_obj: object | None,
+            duration_sec: int,
+        ) -> tuple[Path | None, str | None]:
             op = client.models.generate_videos(
                 model=model,
                 prompt=prompt,
-                image=img_obj,
+                image=image_obj,
                 config=types.GenerateVideosConfig(
                     number_of_videos=1,
-                    duration_seconds=int(clip_len),
-                    enhance_prompt=True,
+                    duration_seconds=int(duration_sec),
+                    aspect_ratio="9:16",
                 ),
             )
-
-            # Poll until done (async-friendly)
             while not op.done:
                 await asyncio.sleep(3)
                 op = client.operations.get(op)
 
             if getattr(op, "error", None):
-                return GenerateVideoResponse(
-                    status="failed",
-                    job_id=job_id,
-                    preview_message=f"Gemini video generation failed: {op.error}",
-                    video_url=None,
-                    provider=self.name,
-                    description=prompts.storyboard.logline,
-                    narration_text=req.narration_text,
-                    video_prompt=prompts.video_prompt,
-                )
-
+                err_obj = getattr(op, "error", None)
+                msg = None
+                try:
+                    msg = getattr(err_obj, "message", None) or str(err_obj)
+                except Exception:
+                    msg = "unknown error"
+                return None, msg
             video = op.response.generated_videos[0].video
-            # The SDK video object can be downloaded via .download() or has bytes depending on version.
-            # We support both patterns.
-            clip_file = out_dir / f"{job_id}_clip{i+1}.mp4"
+            clip_file = out_dir / f"{job_id}_clip{clip_index + 1}.mp4"
             wrote = False
             try:
                 if hasattr(video, "download"):
@@ -302,22 +273,76 @@ class GeminiVeoProvider(MediaProvider):
                     wrote = True
             except Exception:
                 wrote = False
-
             if not wrote or not clip_file.exists() or clip_file.stat().st_size == 0:
-                return GenerateVideoResponse(
-                    status="failed",
-                    job_id=job_id,
-                    preview_message="Gemini returned a video payload we couldn't save. (SDK response format changed.)",
-                    video_url=None,
-                    provider=self.name,
-                    description=prompts.storyboard.logline,
-                    narration_text=req.narration_text,
-                    video_prompt=prompts.video_prompt,
-                )
+                return None, "empty video bytes"
+            return clip_file, None
 
-            clip_paths.append(clip_file)
-            # Small pause to avoid rate spikes
-            time.sleep(0.25)
+        if req.scenes and len(req.scenes) > 0:
+            for i, seg in enumerate(req.scenes):
+                img_obj = None
+                # Prefer AI-generated still if present, otherwise the original anchor still.
+                img_path = seg.render_image_path or seg.anchor_image_path
+                if img_path:
+                    lp = _local_image_path(img_path)
+                    if lp.exists():
+                        try:
+                            img_obj = types.Image.from_file(str(lp))
+                        except Exception:
+                            img_obj = None
+                # Veo duration bounds: 4–8 seconds (API enforces this).
+                clip_len = min(8, max(4, int(seg.duration_seconds or 8)))
+                prompt = seg.description
+                clip_file, err = await _one_veo_clip(clip_index=i, prompt=prompt, image_obj=img_obj, duration_sec=clip_len)
+                if clip_file is None:
+                    return GenerateVideoResponse(
+                        status="failed",
+                        job_id=job_id,
+                        preview_message=f"Gemini video generation failed for scene {i + 1}: {err or 'unknown'}.",
+                        video_url=None,
+                        provider=self.name,
+                        description=prompts.storyboard.logline,
+                        video_prompt=prompts.video_prompt,
+                    )
+                clip_paths.append(clip_file)
+                time.sleep(0.25)
+        else:
+            # Legacy: one prompt, optionally repeated clips to fill duration.
+            anchor_candidates = []
+            if req.face_anchor_image_path:
+                anchor_candidates.append(req.face_anchor_image_path)
+            anchor_candidates.extend(req.anchor_image_paths or [])
+            img_obj = None
+            if anchor_candidates:
+                p = anchor_candidates[0]
+                local = _local_image_path(p)
+                if local.exists():
+                    try:
+                        img_obj = types.Image.from_file(str(local))
+                    except Exception:
+                        img_obj = None
+
+            total = int(req.duration_seconds or 8)
+            # Veo duration bounds: 4–8 seconds (API enforces this).
+            clip_len = 8 if total >= 8 else max(4, total)
+            n = max(1, int((total + clip_len - 1) // clip_len))
+
+            prompt = prompts.video_prompt
+            for i in range(n):
+                clip_file, err = await _one_veo_clip(clip_index=i, prompt=prompt, image_obj=img_obj, duration_sec=int(clip_len))
+                if clip_file is None:
+                    return GenerateVideoResponse(
+                        status="failed",
+                        job_id=job_id,
+                        preview_message=f"Gemini video generation failed: {err or 'unknown'}.",
+                        video_url=None,
+                        provider=self.name,
+                        description=prompts.storyboard.logline,
+                        video_prompt=prompts.video_prompt,
+                    )
+                clip_paths.append(clip_file)
+                time.sleep(0.25)
+
+        total = int(req.duration_seconds or 8)
 
         # If we can't concatenate, return the first clip as a real video.
         if VideoFileClip is None or concatenate_videoclips is None or len(clip_paths) == 1:
@@ -330,7 +355,6 @@ class GeminiVeoProvider(MediaProvider):
                 video_url=f"/generated_media/{final_name.name}",
                 provider=self.name,
                 description=prompts.storyboard.logline,
-                narration_text=req.narration_text,
                 video_prompt=prompts.video_prompt,
             )
 
@@ -357,7 +381,6 @@ class GeminiVeoProvider(MediaProvider):
                 video_url=f"/generated_media/{final_name.name}",
                 provider=self.name,
                 description=prompts.storyboard.logline,
-                narration_text=req.narration_text,
                 video_prompt=prompts.video_prompt,
             )
         except Exception as e:
@@ -371,7 +394,6 @@ class GeminiVeoProvider(MediaProvider):
                 video_url=f"/generated_media/{final_name.name}",
                 provider=self.name,
                 description=prompts.storyboard.logline,
-                narration_text=req.narration_text,
                 video_prompt=prompts.video_prompt,
             )
 
@@ -389,7 +411,6 @@ class RunwayStubProvider(MediaProvider):
             video_url=None,
             provider=self.name,
             description=prompts.storyboard.logline,
-            narration_text=req.narration_text,
             video_prompt=prompts.video_prompt,
         )
 

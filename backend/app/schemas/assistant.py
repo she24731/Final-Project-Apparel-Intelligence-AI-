@@ -29,3 +29,4 @@ class AssistantTurnResponse(BaseModel):
     recommendation: RecommendOutfitResponse | None = None
     script: GenerateScriptResponse | None = None
     video: GenerateVideoResponse | None = None
+    updated_context: ChatContext | None = None

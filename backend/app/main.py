@@ -29,10 +29,28 @@ app.include_router(media.router)
 app.include_router(social.router)
 app.include_router(assistant.router)
 
+# Some clients run behind a frontend dev proxy that prefixes paths with `/api`.
+# To avoid brittle env/proxy mismatches, we support both the bare routes and `/api/*`.
+app.include_router(health.router, prefix="/api")
+app.include_router(wardrobe.router, prefix="/api")
+app.include_router(recommend.router, prefix="/api")
+app.include_router(purchase.router, prefix="/api")
+app.include_router(media.router, prefix="/api")
+app.include_router(social.router, prefix="/api")
+app.include_router(assistant.router, prefix="/api")
+
 # Serve uploaded images for UI thumbnails.
 app.mount("/uploads", StaticFiles(directory=str(_settings.uploads_dir)), name="uploads")
+# Also serve them under `/api/uploads` for callers whose base includes `/api`.
+app.mount("/api/uploads", StaticFiles(directory=str(_settings.uploads_dir)), name="api_uploads")
 # Serve generated media (mp4) for the Content page.
 app.mount("/generated_media", StaticFiles(directory=str(_settings.generated_media_dir)), name="generated_media")
+# And under `/api/generated_media` for symmetry with `/api` bases.
+app.mount(
+    "/api/generated_media",
+    StaticFiles(directory=str(_settings.generated_media_dir)),
+    name="api_generated_media",
+)
 
 
 @app.on_event("startup")

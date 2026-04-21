@@ -89,7 +89,7 @@ export const mockVideo: GenerateVideoResponse = {
   status: "mock",
   job_id: "mock-job-001",
   preview_message:
-    "Mock runway reel: slow dolly-in, natural light, fabric drape emphasis. Hook Runway/Veo here for production.",
+    "Mock Gemini reel: slow dolly-in, natural light, fabric drape emphasis. Hook Gemini Veo here for production.",
   video_url: null,
   provider: "mock",
 };

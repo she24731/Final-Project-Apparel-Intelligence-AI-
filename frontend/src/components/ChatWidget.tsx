@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { AssistantTurnResponse, ChatContextPayload, ChatTurn } from "@/types";
-import { ApiError, apiPostJson } from "@/lib/api";
+import { ApiError, apiPostJson, apiPostMultipart } from "@/lib/api";
 
 export function ChatWidget({
   context,
@@ -13,6 +13,8 @@ export function ChatWidget({
   const [input, setInput] = useState("Recommend an outfit for a rainy work day.");
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
 
   const starter = useMemo(
     () =>
@@ -22,24 +24,34 @@ export function ChatWidget({
 
   const send = async () => {
     const trimmed = input.trim();
-    if (!trimmed || busy) return;
+    if ((!trimmed && files.length === 0) || busy) return;
     setBusy(true);
-    const user: ChatTurn = { id: crypto.randomUUID(), role: "user", content: trimmed, ts: new Date().toISOString() };
+    const messageText = trimmed || (files.length ? "Uploaded attachments." : "");
+    const user: ChatTurn = { id: crypto.randomUUID(), role: "user", content: messageText, ts: new Date().toISOString() };
     setTurns((prev) => [...prev, user]);
     setInput("");
     try {
-      const res = await apiPostJson<AssistantTurnResponse>("/assistant/turn", {
-        message: trimmed,
-        context: {
-          occasion: context.occasion,
-          weather: context.weather,
-          vibe: context.vibe,
-          preference: context.preference,
-          wardrobe_item_ids: context.wardrobe_item_ids,
-          outfit_summary: context.outfit_summary,
-          face_anchor_path: context.face_anchor_path,
-        },
-      });
+      const ctx = {
+        occasion: context.occasion,
+        weather: context.weather,
+        vibe: context.vibe,
+        preference: context.preference,
+        wardrobe_item_ids: context.wardrobe_item_ids,
+        outfit_summary: context.outfit_summary,
+        face_anchor_path: context.face_anchor_path,
+      };
+
+      const res =
+        files.length > 0
+          ? await apiPostMultipart<AssistantTurnResponse>("/assistant/turn-multipart", (() => {
+              const fd = new FormData();
+              fd.append("message", messageText);
+              fd.append("context_json", JSON.stringify(ctx));
+              for (const f of files) fd.append("files", f);
+              return fd;
+            })())
+          : await apiPostJson<AssistantTurnResponse>("/assistant/turn", { message: trimmed, context: ctx });
+
       onApplyResult(res);
       const assistant: ChatTurn = {
         id: crypto.randomUUID(),
@@ -48,6 +60,8 @@ export function ChatWidget({
         ts: new Date().toISOString(),
       };
       setTurns((prev) => [...prev, assistant]);
+      setFiles([]);
+      if (fileRef.current) fileRef.current.value = "";
     } catch (e) {
       const msg =
         e instanceof ApiError
@@ -102,7 +116,58 @@ export function ChatWidget({
           </div>
 
           <div className="border-t border-line p-4">
+            {files.length > 0 ? (
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                {files.slice(0, 6).map((f, idx) => (
+                  <button
+                    key={`${f.name}-${idx}`}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setFiles((prev) => prev.filter((_, i) => i !== idx))}
+                    className="rounded-full border border-line bg-ink-950 px-3 py-1.5 text-[11px] font-semibold text-mist/75 hover:border-accent/40 disabled:opacity-40"
+                    title="Remove attachment"
+                  >
+                    {f.name.length > 18 ? `${f.name.slice(0, 8)}…${f.name.slice(-7)}` : f.name} ×
+                  </button>
+                ))}
+                {files.length > 6 ? (
+                  <span className="text-[11px] font-semibold text-mist/45">+{files.length - 6} more</span>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setFiles([]);
+                    if (fileRef.current) fileRef.current.value = "";
+                  }}
+                  className="ml-auto rounded-full border border-line bg-ink-950 px-3 py-1.5 text-[11px] font-semibold text-mist/60 hover:border-accent/40 disabled:opacity-40"
+                  title="Clear all attachments"
+                >
+                  Clear
+                </button>
+              </div>
+            ) : null}
             <div className="flex gap-2">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const next = Array.from(e.target.files ?? []);
+                  setFiles(next);
+                }}
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+                className="rounded-2xl border border-line bg-ink-950 px-4 py-3 text-base font-semibold text-mist/85 hover:border-accent/40 disabled:opacity-40"
+                title="Add images (selfie first, then clothing)"
+              >
+                +
+              </button>
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}

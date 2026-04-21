@@ -25,12 +25,22 @@ export function ImageLightboxProvider({ children }: { children: React.ReactNode 
           onClick={() => setState(null)}
         >
           <div className="w-full max-w-4xl">
-            <img
-              src={state.src}
-              alt={state.alt ?? "Image preview"}
-              className="max-h-[82vh] w-full rounded-3xl border border-line bg-ink-950 object-contain shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            />
+            {/\.(mp4|webm)(\?|#|$)/i.test(state.src) ? (
+              <video
+                src={state.src}
+                controls
+                playsInline
+                className="max-h-[82vh] w-full rounded-3xl border border-line bg-ink-950 object-contain shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <img
+                src={state.src}
+                alt={state.alt ?? "Image preview"}
+                className="max-h-[82vh] w-full rounded-3xl border border-line bg-ink-950 object-contain shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              />
+            )}
             <button
               type="button"
               onClick={() => setState(null)}

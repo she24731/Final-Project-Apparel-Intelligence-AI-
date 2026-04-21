@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { useImageLightbox } from "@/components/ui/ImageLightbox";
+import { mediaUrl } from "@/lib/api";
 import type { GarmentRecord } from "@/types";
 
 export function WardrobeUploadPanel({
@@ -9,17 +10,21 @@ export function WardrobeUploadPanel({
   error,
   onIngest,
   onDelete,
+  onRemoveAll,
 }: {
   items: GarmentRecord[];
   busy: boolean;
   error: string | null;
   onIngest: (file: File, hints: string | undefined) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onRemoveAll: () => Promise<void>;
 }) {
   const { open } = useImageLightbox();
   const [hints, setHints] = useState("");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [uploadTotal, setUploadTotal] = useState(0);
+  const [uploadDone, setUploadDone] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const empty = items.length === 0;
@@ -38,14 +43,24 @@ export function WardrobeUploadPanel({
     // Apply the current hints to the whole batch (optional).
     const batchHints = hints.trim() || undefined;
     setHints("");
-    setToast(`Uploading ${arr.length} image${arr.length === 1 ? "" : "s"}…`);
+    setUploadTotal(arr.length);
+    setUploadDone(0);
+    setToast(`Uploading 0/${arr.length}… (${arr.length} left)`);
     for (const f of arr) {
       setSelectedName(f.name);
       // Upload sequentially for stability (avoids flooding API + keeps UI predictable).
       // eslint-disable-next-line no-await-in-loop
       await onIngest(f, batchHints);
+      setUploadDone((d) => {
+        const next = Math.min(arr.length, d + 1);
+        const left = Math.max(0, arr.length - next);
+        setToast(`Uploading ${next}/${arr.length}… (${left} left)`);
+        return next;
+      });
     }
     setSelectedName(null);
+    setUploadTotal(0);
+    setUploadDone(0);
     setToast(`Added ${arr.length} item${arr.length === 1 ? "" : "s"} to your wardrobe.`);
   };
 
@@ -162,14 +177,35 @@ export function WardrobeUploadPanel({
             placeholder="wool, winter, navy…"
             className="w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-sm text-mist outline-none ring-accent/30 placeholder:text-mist/35 focus:ring-2"
           />
-          {busy ? <p className="text-xs text-mist/60">Uploading{selectedName ? `: ${selectedName}` : ""}…</p> : null}
+          {busy ? (
+            <p className="text-xs text-mist/60">
+              Uploading{selectedName ? `: ${selectedName}` : ""}…
+              {uploadTotal > 0 ? (
+                <span className="ml-2 text-mist/45">
+                  ({uploadDone}/{uploadTotal} · {Math.max(0, uploadTotal - uploadDone)} left)
+                </span>
+              ) : null}
+            </p>
+          ) : null}
           {error ? <p className="text-xs text-red-300">{error}</p> : null}
         </div>
 
         <div className="rounded-xl border border-line bg-ink-950/40 p-4">
           <div className="mb-3 flex items-center justify-between">
             <p className="text-xs font-semibold uppercase tracking-wide text-mist/50">Your wardrobe</p>
-            <p className="text-xs text-mist/45">Used in Style + Buy Analyzer</p>
+            <div className="flex items-center gap-3">
+              <p className="text-xs text-mist/45">Used in Style + Buy Analyzer</p>
+              {!empty ? (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void onRemoveAll()}
+                  className="rounded-full border border-line bg-ink-950/50 px-3 py-1 text-[11px] font-semibold text-mist/70 hover:border-red-400/40 hover:text-mist disabled:opacity-40"
+                >
+                  Remove all
+                </button>
+              ) : null}
+            </div>
           </div>
           {empty ? (
             <div className="flex h-full min-h-[140px] flex-col items-center justify-center text-center">
@@ -183,11 +219,11 @@ export function WardrobeUploadPanel({
                   <div className="flex items-start gap-3">
                     <div className="h-12 w-12 overflow-hidden rounded-xl border border-line bg-ink-950/40">
                       <img
-                        src={`/api/${g.image_path}`}
+                        src={mediaUrl(g.image_path)}
                         alt={`${g.category} ${g.color}`}
                         className="h-full w-full object-cover"
                         loading="lazy"
-                        onClick={() => open(`/api/${g.image_path}`, `${g.category} · ${g.color}`)}
+                        onClick={() => open(mediaUrl(g.image_path), `${g.category} · ${g.color}`)}
                         style={{ cursor: "zoom-in" }}
                         onError={(e) => {
                           // Hide broken thumbnails quietly.

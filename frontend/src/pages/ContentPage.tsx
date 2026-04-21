@@ -6,6 +6,7 @@ import type {
   GenerateScriptResponse,
   GenerateVideoRequestBody,
   GenerateVideoResponse,
+  PreviewReelCopyRequestBody,
   PreviewReelCopyResponse,
   RecommendOutfitResponse,
 } from "@/types";
@@ -35,19 +36,16 @@ export function ContentPage({
 }) {
   const hasOutfit = !!recommendation && recommendation.garments.length > 0;
 
-  const previewReel = async (body: {
-    scene_prompt: string;
-    anchor_image_paths: string[];
-    face_anchor_path: string | null;
-    duration_seconds: number;
-    face_anchor_present: boolean;
-  }) => apiPostJson<PreviewReelCopyResponse>("/preview-reel-copy", body);
+  const generateScenes = async (body: PreviewReelCopyRequestBody) => apiPostJson<PreviewReelCopyResponse>("/generate-scenes", body);
+
+  const generateSceneAssets = async (body: PreviewReelCopyRequestBody & { scene: PreviewReelCopyResponse["scenes"][number] }) =>
+    apiPostJson<PreviewReelCopyResponse["scenes"][number]>("/generate-scene-assets", body);
 
   return (
     <div className="space-y-10">
       <section>
         <h2 className="text-2xl font-semibold tracking-tight text-mist md:text-3xl">Simulation</h2>
-        <p className="mt-2 text-sm text-mist/65">Turn an outfit into a script, narration, and a generated reel preview.</p>
+        <p className="mt-2 text-sm text-mist/65">Turn an outfit into a script and a generated reel preview.</p>
       </section>
 
       {!hasOutfit ? (
@@ -71,7 +69,8 @@ export function ContentPage({
           busy={videoBusy}
           faceAnchorPath={faceAnchorPath}
           onUploadFaceAnchor={onUploadFaceAnchor}
-          onPreviewReelCopy={previewReel}
+          onGenerateScenes={generateScenes}
+          onGenerateSceneAssets={generateSceneAssets}
           onRenderVideo={onRenderVideo}
         />
       </div>

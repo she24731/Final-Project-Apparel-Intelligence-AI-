@@ -7,6 +7,6 @@ __pycache__/
 *.pyc
 generated_media/
 backend/.venv/
-backend/data/uploads/
+backend/data/
 frontend/node_modules/
 frontend/dist/

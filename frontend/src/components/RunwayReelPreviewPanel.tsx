@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "@/components/ui/Card";
-import { ApiError, apiPostJson, mediaUrl } from "@/lib/api";
+import { useImageLightbox } from "@/components/ui/ImageLightbox";
+import { ApiError, apiPostMultipart, mediaUrl } from "@/lib/api";
 import type {
   GenerateVideoRequestBody,
   GenerateVideoResponse,
+  PreviewReelCopyRequestBody,
   PreviewReelCopyResponse,
   RecommendOutfitResponse,
   ReelSceneDraft,
+  ReelVideoScenePayload,
 } from "@/types";
 
 export function RunwayReelPreviewPanel({
@@ -15,7 +18,8 @@ export function RunwayReelPreviewPanel({
   busy,
   faceAnchorPath,
   onUploadFaceAnchor,
-  onPreviewReelCopy,
+  onGenerateScenes,
+  onGenerateSceneAssets,
   onRenderVideo,
 }: {
   recommendation: RecommendOutfitResponse | null;
@@ -23,24 +27,65 @@ export function RunwayReelPreviewPanel({
   busy: boolean;
   faceAnchorPath: string | null;
   onUploadFaceAnchor: (file: File) => Promise<void>;
-  onPreviewReelCopy: (body: {
-    scene_prompt: string;
-    anchor_image_paths: string[];
-    face_anchor_path: string | null;
-    duration_seconds: number;
-    face_anchor_present: boolean;
-  }) => Promise<PreviewReelCopyResponse>;
+  onGenerateScenes: (body: PreviewReelCopyRequestBody) => Promise<PreviewReelCopyResponse>;
+  onGenerateSceneAssets: (body: PreviewReelCopyRequestBody & { scene: ReelSceneDraft }) => Promise<ReelSceneDraft>;
   onRenderVideo: (body: GenerateVideoRequestBody) => Promise<void>;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const musicInputRef = useRef<HTMLInputElement | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
+  const [musicUploading, setMusicUploading] = useState<string | null>(null);
+  const [musicErr, setMusicErr] = useState<string | null>(null);
+  const [musicPath, setMusicPath] = useState<string | null>(null);
+  const [copyErr, setCopyErr] = useState<string | null>(null);
   const [copyBusy, setCopyBusy] = useState(false);
+  const [sceneAssetBusy, setSceneAssetBusy] = useState<number | null>(null);
+  const [sceneAssetErr, setSceneAssetErr] = useState<Record<number, string | null>>({});
+  const { open: openLightbox } = useImageLightbox();
   const [scenePrompt, setScenePrompt] = useState("");
-  const [narration, setNarration] = useState("");
   const [logline, setLogline] = useState("");
   const [scenes, setScenes] = useState<ReelSceneDraft[]>([]);
+  const autoPreviewTimerRef = useRef<number | null>(null);
+
+  // Persist panel-local Simulation state across route/tab toggles (component remounts).
+  const persistKey = useMemo(() => {
+    const outfitKey = recommendation?.garments?.map((g) => g.image_path).join("|") ?? "";
+    return `apparel_sim_panel_v1:${faceAnchorPath ?? "noface"}:${outfitKey}`;
+  }, [faceAnchorPath, recommendation]);
+
+  const persistWrite = useCallback(
+    (next: Partial<{ scenePrompt: string; logline: string; scenes: ReelSceneDraft[]; musicPath: string | null }>) => {
+      try {
+        const raw = sessionStorage.getItem(persistKey);
+        const base = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        sessionStorage.setItem(persistKey, JSON.stringify({ ...base, ...next }));
+      } catch {
+        // ignore
+      }
+    },
+    [persistKey],
+  );
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(persistKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        scenePrompt?: string;
+        logline?: string;
+        scenes?: ReelSceneDraft[];
+        musicPath?: string | null;
+      };
+      if (typeof parsed.scenePrompt === "string") setScenePrompt(parsed.scenePrompt);
+      if (typeof parsed.logline === "string") setLogline(parsed.logline);
+      if (Array.isArray(parsed.scenes)) setScenes(parsed.scenes);
+      if (typeof parsed.musicPath !== "undefined") setMusicPath(parsed.musicPath ?? null);
+    } catch {
+      // ignore
+    }
+  }, [persistKey]);
 
   const outfitSummary = useMemo(() => {
     if (!recommendation?.garments.length) return "";
@@ -52,24 +97,51 @@ export function RunwayReelPreviewPanel({
     return recommendation.garments.map((g) => g.image_path).filter((p) => typeof p === "string" && p.startsWith("uploads/"));
   }, [recommendation]);
 
-  useEffect(() => {
-    if (!outfitSummary) return;
-    setScenePrompt((prev) =>
-      prev.trim().length ? prev : `${outfitSummary}. Runway walk-through with natural light and slow pan.`,
-    );
-  }, [outfitSummary]);
+  // Intentionally do not auto-fill the movie idea.
+  // The user should supply a real "movie idea" (concept + vibe) rather than a generic template.
 
   const previewSrc = useMemo(() => {
     if (!faceAnchorPath) return null;
     return mediaUrl(faceAnchorPath);
   }, [faceAnchorPath]);
 
-  const mergedNarration = useMemo(() => {
-    if (scenes.length) {
-      return scenes.map((s) => s.narration.trim()).filter(Boolean).join("\n\n");
+  const runGenerateScenes = useCallback(async () => {
+    if (!scenePrompt.trim()) {
+      setCopyErr('Please enter a “Movie idea” first (one sentence: concept + vibe).');
+      return;
     }
-    return narration;
-  }, [scenes, narration]);
+    if (!recommendation?.garments.length) {
+      setCopyErr("No wardrobe anchors found yet. Pick an outfit first (so we have garment images to turn into scenes).");
+      return;
+    }
+    if (autoPreviewTimerRef.current !== null) {
+      window.clearTimeout(autoPreviewTimerRef.current);
+      autoPreviewTimerRef.current = null;
+    }
+    setCopyBusy(true);
+    setCopyErr(null);
+    try {
+      const res = await onGenerateScenes({
+        scene_prompt: scenePrompt.trim(),
+        anchor_image_paths: wardrobeAnchors,
+        face_anchor_path: faceAnchorPath,
+        duration_seconds: 30,
+        face_anchor_present: !!faceAnchorPath,
+      });
+      setLogline(res.description);
+      setScenes(res.scenes);
+      persistWrite({
+        scenePrompt: scenePrompt.trim(),
+        logline: res.description,
+        scenes: res.scenes,
+        musicPath,
+      });
+    } catch (e) {
+      setCopyErr(e instanceof ApiError ? e.body : "Couldn’t generate scene assets.");
+    } finally {
+      setCopyBusy(false);
+    }
+  }, [scenePrompt, recommendation?.garments.length, onGenerateScenes, wardrobeAnchors, faceAnchorPath, persistWrite, musicPath]);
 
   const pickFile = async (f: File | null) => {
     if (!f) return;
@@ -88,55 +160,44 @@ export function RunwayReelPreviewPanel({
     }
   };
 
-  const runPreviewCopy = async () => {
-    if (!scenePrompt.trim()) return;
-    setCopyBusy(true);
-    setUploadErr(null);
-    try {
-      const res = await onPreviewReelCopy({
-        scene_prompt: scenePrompt.trim(),
-        anchor_image_paths: wardrobeAnchors,
-        face_anchor_path: faceAnchorPath,
-        duration_seconds: 30,
-        face_anchor_present: !!faceAnchorPath,
-      });
-      setLogline(res.description);
-      setNarration(res.narration_text);
-      setScenes(res.scenes);
-    } catch (e) {
-      setUploadErr(e instanceof ApiError ? e.body : "Couldn’t generate reel copy.");
-    } finally {
-      setCopyBusy(false);
-    }
-  };
-
   const runRender = async () => {
     if (!scenePrompt.trim()) return;
+    const scenePayload: ReelVideoScenePayload[] | undefined =
+      scenes.length > 0
+        ? scenes.map((s) => ({
+            anchor_image_path: s.anchor_image_path,
+            render_image_path: s.generated_image_path ?? null,
+            anchor_type: s.anchor_type ?? "wardrobe",
+            description: s.description,
+            duration_seconds: s.duration_seconds ?? 8,
+          }))
+        : undefined;
     await onRenderVideo({
       scene_prompt: scenePrompt.trim(),
       anchor_image_paths: wardrobeAnchors,
       face_anchor_image_path: faceAnchorPath,
       duration_seconds: 30,
-      narration_text: mergedNarration.trim().length ? mergedNarration.trim() : null,
+      background_music_path: musicPath,
+      scenes: scenePayload,
     });
   };
 
   const providerHint =
-    "No MP4 is returned while MEDIA_PROVIDER is `mock`. Set `MEDIA_PROVIDER=gemini_video` and a valid `GEMINI_API_KEY` in backend/.env to render real video via Gemini Veo (billable).";
+    "Each anchor (selfie + garment shots) gets its own AI shot description. Video render stitches one clip per scene when MEDIA_PROVIDER=gemini_video and GEMINI_API_KEY are set (billable).";
 
   return (
     <Card
       title="Gemini Reel Lab"
-      subtitle="Generate editable runway copy per anchor, then render video when you are ready."
+      subtitle="Multi-scene ~30s reel: one shot per anchor image, then stitched into a single MP4."
       right={
         <div className="flex flex-wrap justify-end gap-2">
           <button
             type="button"
             disabled={busy || copyBusy || !recommendation}
-            onClick={() => void runPreviewCopy()}
+            onClick={() => void runGenerateScenes()}
             className="rounded-lg border border-line bg-ink-950 px-3 py-1.5 text-xs font-semibold text-mist hover:border-accent/50 disabled:opacity-40"
           >
-            {copyBusy ? "Drafting…" : "Generate copy"}
+            {copyBusy ? "Working…" : "Generate scenes"}
           </button>
           <button
             type="button"
@@ -151,6 +212,8 @@ export function RunwayReelPreviewPanel({
     >
       <div className="space-y-3">
         <p className="text-xs text-mist/50">{providerHint}</p>
+        {copyBusy ? <p className="text-xs text-accent/90">Generating shot descriptions for each scene…</p> : null}
+        {copyErr ? <p className="text-xs text-red-300/85">{copyErr}</p> : null}
 
         <div
           className={[
@@ -184,7 +247,7 @@ export function RunwayReelPreviewPanel({
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mist/55">Face anchor (optional)</p>
               <p className="mt-1 text-xs text-mist/45">
-                Drop a selfie (JPG/PNG/WebP/HEIC). Used as continuity for image-to-video providers.
+                Upload a selfie to unlock a dedicated opening scene. Wardrobe images each get their own scene.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -222,27 +285,190 @@ export function RunwayReelPreviewPanel({
         </div>
 
         <div className="rounded-2xl border border-line bg-ink-950/25 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mist/55">Runway brief (editable)</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mist/55">Movie idea</p>
+          <p className="mt-1 text-xs text-mist/45">
+            One sentence that combines concept + vibe (what happens + how it should feel/look/sound).
+          </p>
           <textarea
             value={scenePrompt}
-            onChange={(e) => setScenePrompt(e.target.value)}
+            onChange={(e) => {
+              setScenePrompt(e.target.value);
+              persistWrite({ scenePrompt: e.target.value });
+            }}
             rows={3}
+            placeholder='e.g. "Late-afternoon Paris café: Lisa slips in for coffee, calm confidence, warm film grain." Or "Mission Impossible-style runway sprint: stealthy, kinetic, high-contrast lights."'
             className="mt-2 w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-sm text-mist outline-none ring-accent/15 focus:ring-2"
           />
         </div>
 
         <div className="rounded-2xl border border-line bg-ink-950/25 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mist/55">Voiceover (editable)</p>
-          <textarea
-            value={narration}
-            onChange={(e) => setNarration(e.target.value)}
-            rows={4}
-            className="mt-2 w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-sm text-mist outline-none ring-accent/15 focus:ring-2"
-          />
-          <p className="mt-2 text-[11px] text-mist/40">
-            If you edit per-scene narration below, those lines replace this block when rendering.
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mist/55">Background music (optional)</p>
+              <p className="mt-1 text-xs text-mist/45">Upload an audio file (mp3/m4a/wav/ogg) to mux into the final MP4.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                ref={musicInputRef}
+                type="file"
+                accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  e.currentTarget.value = "";
+                  if (!f) return;
+                  void (async () => {
+                    setMusicUploading(f.name);
+                    setMusicErr(null);
+                    try {
+                      const fd = new FormData();
+                      fd.append("file", f);
+                      const res = await apiPostMultipart<{ path: string }>("/upload-music", fd);
+                      setMusicPath(res.path);
+                      persistWrite({ musicPath: res.path });
+                    } catch (e) {
+                      setMusicErr(e instanceof ApiError ? e.body : "Music upload failed.");
+                    } finally {
+                      setMusicUploading(null);
+                    }
+                  })();
+                }}
+              />
+              <button
+                type="button"
+                disabled={busy || !!musicUploading}
+                onClick={() => musicInputRef.current?.click()}
+                className="rounded-xl border border-line bg-ink-950 px-4 py-2 text-xs font-semibold text-mist hover:border-accent/50 disabled:opacity-40"
+              >
+                {musicUploading ? `Uploading ${musicUploading}…` : musicPath ? "Replace music" : "Choose music"}
+              </button>
+            </div>
+          </div>
+          {musicPath ? <p className="mt-2 text-[11px] text-mist/50">Using: {musicPath}</p> : null}
+          {musicErr ? <p className="mt-2 text-xs text-red-300/80">{musicErr}</p> : null}
         </div>
+
+        {scenes.length > 0 ? (
+          <div className="space-y-3">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent/90">Scenes for ~30s reel</p>
+              <p className="text-[11px] text-mist/45">{scenes.length} shot{scenes.length === 1 ? "" : "s"} · edit each beat, then render</p>
+            </div>
+            {scenes.map((s, idx) => (
+              <div
+                key={`${s.anchor_image_path ?? "x"}-${idx}`}
+                className="rounded-2xl border border-accent/20 bg-ink-950/40 p-4"
+              >
+                <div className="flex flex-wrap items-start gap-3">
+                  {s.generated_video_path || s.generated_image_path || s.anchor_image_path ? (
+                    <button
+                      type="button"
+                      className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-line bg-ink-950/40 text-left ring-0 transition hover:ring-2 hover:ring-accent/35"
+                      onClick={() =>
+                        openLightbox(
+                          mediaUrl(s.generated_video_path || s.generated_image_path || s.anchor_image_path || ""),
+                          s.label || `Scene ${idx + 1}`,
+                        )
+                      }
+                      title="Click to enlarge"
+                    >
+                      {s.generated_video_path ? (
+                        <video
+                          src={mediaUrl(s.generated_video_path)}
+                          className="h-full w-full object-cover"
+                          muted
+                          playsInline
+                          autoPlay
+                          loop
+                          preload="metadata"
+                        />
+                      ) : (
+                        <img
+                          src={mediaUrl(s.generated_image_path || s.anchor_image_path || "")}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          loading="lazy"
+                        />
+                      )}
+                    </button>
+                  ) : (
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border border-dashed border-line text-[10px] text-mist/40">
+                      No still
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <p className="text-xs font-semibold text-mist">
+                      {s.label || `Scene ${idx + 1}`}{" "}
+                      <span className="text-mist/45">
+                        ({s.anchor_type === "face" ? "face" : s.anchor_type === "wardrobe" ? "garment" : "beat"}) · ~{s.duration_seconds ?? 8}s
+                      </span>
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={busy || copyBusy || sceneAssetBusy === idx}
+                        onClick={() =>
+                          void (async () => {
+                            setSceneAssetErr((e) => ({ ...e, [idx]: null }));
+                            setSceneAssetBusy(idx);
+                            try {
+                              const updated = await onGenerateSceneAssets({
+                                scene_prompt: scenePrompt.trim(),
+                                anchor_image_paths: wardrobeAnchors,
+                                face_anchor_path: faceAnchorPath,
+                                duration_seconds: 30,
+                                face_anchor_present: !!faceAnchorPath,
+                                scene: s,
+                              });
+                              const next = [...scenes];
+                              next[idx] = updated;
+                              setScenes(next);
+                            } catch (e) {
+                              setSceneAssetErr((prev) => ({
+                                ...prev,
+                                [idx]: e instanceof ApiError ? e.body : "Couldn’t generate scene image.",
+                              }));
+                            } finally {
+                              setSceneAssetBusy(null);
+                            }
+                          })()
+                        }
+                        className="rounded-lg border border-line bg-ink-950 px-3 py-1.5 text-[11px] font-semibold text-mist/80 hover:border-accent/45 disabled:opacity-40"
+                      >
+                        {sceneAssetBusy === idx
+                          ? "Working…"
+                          : s.generated_image_path
+                            ? "Regenerate image"
+                            : "Generate image"}
+                      </button>
+                    </div>
+                    {sceneAssetErr[idx] ? (
+                      <p className="text-[11px] text-red-300/90">{sceneAssetErr[idx]}</p>
+                    ) : null}
+                    <label className="block text-[11px] text-mist/50">
+                      Description
+                      <textarea
+                        value={s.description}
+                        onChange={(e) => {
+                          const next = [...scenes];
+                          next[idx] = { ...s, description: e.target.value };
+                          setScenes(next);
+                          persistWrite({ scenes: next });
+                        }}
+                        rows={3}
+                        className="mt-1 w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-xs text-mist/90 outline-none ring-accent/15 focus:ring-2"
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-xl border border-dashed border-line/80 bg-ink-950/30 p-6 text-center text-sm text-mist/55">
+            {recommendation ? "Scenes appear here after AI drafts load (or tap Regenerate scenes)." : "Select an outfit on Style first."}
+          </div>
+        )}
 
         {logline ? (
           <div className="rounded-2xl border border-line bg-ink-950/30 p-4">
@@ -256,62 +482,19 @@ export function RunwayReelPreviewPanel({
           </div>
         ) : null}
 
-        {scenes.length ? (
-          <div className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-mist/55">Per anchor / scene</p>
-            {scenes.map((s, idx) => (
-              <div key={`${s.anchor_image_path ?? "none"}-${idx}`} className="rounded-2xl border border-line bg-ink-950/30 p-4">
-                <div className="flex flex-wrap items-start gap-3">
-                  {s.anchor_image_path ? (
-                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-line bg-ink-950/40">
-                      <img
-                        src={mediaUrl(s.anchor_image_path)}
-                        alt=""
-                        className="h-full w-full object-cover"
-                        loading="lazy"
-                      />
-                    </div>
-                  ) : null}
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <p className="text-[11px] text-mist/45">{s.anchor_image_path ?? "No image (single scene)"}</p>
-                    <textarea
-                      value={s.description}
-                      onChange={(e) => {
-                        const next = [...scenes];
-                        next[idx] = { ...s, description: e.target.value };
-                        setScenes(next);
-                      }}
-                      rows={2}
-                      className="w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-xs text-mist/80 outline-none ring-accent/15 focus:ring-2"
-                    />
-                    <textarea
-                      value={s.narration}
-                      onChange={(e) => {
-                        const next = [...scenes];
-                        next[idx] = { ...s, narration: e.target.value };
-                        setScenes(next);
-                      }}
-                      rows={2}
-                      className="w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-xs text-mist/80 outline-none ring-accent/15 focus:ring-2"
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        {!video && !logline && recommendation ? (
-          <div className="rounded-xl border border-dashed border-line/80 bg-ink-950/30 p-8 text-center text-sm text-mist/55">
-            Click <span className="text-mist/80">Generate copy</span> to draft narration and per-anchor beats.
-          </div>
-        ) : null}
-
         {video ? (
           <div className="space-y-3">
             <div className="aspect-video w-full rounded-2xl border border-line bg-gradient-to-br from-ink-950 via-ink-900 to-ink-950">
               <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-accent">Runway</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-accent">
+                  {video.provider === "gemini_video"
+                    ? "Gemini Veo"
+                    : video.provider === "gemini_stub"
+                      ? "Gemini (demo)"
+                      : video.provider === "placeholder"
+                        ? "Local (placeholder)"
+                        : video.provider}
+                </p>
                 <p className="max-w-md text-sm text-mist/75">{video.preview_message}</p>
               </div>
             </div>

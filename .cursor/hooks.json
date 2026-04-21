@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": ".cursor/hooks/autopush.sh",
+        "timeout": 30,
+        "failClosed": false
+      }
+    ]
+  }
+}
+

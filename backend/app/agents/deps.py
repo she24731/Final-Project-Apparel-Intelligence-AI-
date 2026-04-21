@@ -39,6 +39,16 @@ class NarrativeDeps(BaseModel):
     vibe: str | None = None
 
 
+class ReelSceneCopyDeps(BaseModel):
+    scene_index: int
+    scene_total: int
+    anchor_type: str
+    filename_hint: str = ""
+    outfit_summary: str
+    runway_brief: str
+    target_seconds: int
+
+
 class ConciergeDeps(BaseModel):
     """Context for the conversational concierge (routing + grounding)."""
 

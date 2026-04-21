@@ -7,14 +7,18 @@ export function WardrobePage({
   error,
   onIngest,
   onDelete,
+  onRemoveAll,
   onNext,
+  onGoBuyAnalyzer,
 }: {
   wardrobe: GarmentRecord[];
   busy: boolean;
   error: string | null;
   onIngest: (file: File, hints: string | undefined) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onRemoveAll: () => Promise<void>;
   onNext: () => void;
+  onGoBuyAnalyzer: () => void;
 }) {
   const hasEnough = wardrobe.length >= 3;
   return (
@@ -36,21 +40,38 @@ export function WardrobePage({
               <li>Current wardrobe size: {wardrobe.length}</li>
             </ul>
           </div>
-          <button
-            type="button"
-            onClick={onNext}
-            disabled={!hasEnough}
-            className="rounded-2xl bg-accent px-6 py-4 text-base font-semibold text-ink-950 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Go to Style
-          </button>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button
+              type="button"
+              onClick={onNext}
+              disabled={!hasEnough}
+              className="rounded-2xl bg-accent px-6 py-4 text-base font-semibold text-ink-950 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Go to Style
+            </button>
+            <button
+              type="button"
+              onClick={onGoBuyAnalyzer}
+              disabled={!hasEnough}
+              className="rounded-2xl border border-line bg-ink-950 px-6 py-4 text-base font-semibold text-mist/85 transition hover:border-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Go to Buy Analyzer
+            </button>
+          </div>
         </div>
         {!hasEnough ? (
           <p className="mt-4 text-xs text-mist/45">Upload at least 3 items to unlock a good recommendation.</p>
         ) : null}
       </div>
 
-      <WardrobeUploadPanel items={wardrobe} busy={busy} error={error} onIngest={onIngest} onDelete={onDelete} />
+      <WardrobeUploadPanel
+        items={wardrobe}
+        busy={busy}
+        error={error}
+        onIngest={onIngest}
+        onDelete={onDelete}
+        onRemoveAll={onRemoveAll}
+      />
     </div>
   );
 }

@@ -39,6 +39,12 @@ class NarrativeAgentOutput(BaseModel):
     hashtags: list[str] | None = None
 
 
+class ReelSceneCopyOutput(BaseModel):
+    """One scene beat for a runway reel (visual only)."""
+
+    shot_description: str = Field(..., description="Visual description for the video model (no brand names).")
+
+
 class ConciergeOutput(BaseModel):
     """Structured routing for the chat concierge (Gemini)."""
 

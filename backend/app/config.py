@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
     # Veo model id for generate_videos (see Google AI “Generate videos” docs; override via GEMINI_VIDEO_MODEL).
     gemini_video_model: str = Field(default="veo-3.1-generate-preview", validation_alias="GEMINI_VIDEO_MODEL")
+    # TTS model id for generate_content audio output (Gemini API).
+    gemini_tts_model: str = Field(default="models/gemini-2.5-flash-preview-tts", validation_alias="GEMINI_TTS_MODEL")
+    gemini_tts_voice: str = Field(default="Kore", validation_alias="GEMINI_TTS_VOICE")
     runway_api_key: str | None = Field(default=None, validation_alias="RUNWAY_API_KEY")
     media_provider: str = Field(default="mock", validation_alias="MEDIA_PROVIDER")
     backend_host: str = Field(default="127.0.0.1", validation_alias="BACKEND_HOST")

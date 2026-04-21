@@ -9,14 +9,14 @@ from app.agents.deps import ConciergeDeps
 from app.agents.outputs import ConciergeOutput
 from app.agents.orchestrator import (
     analyze_purchase_with_optional_agent,
-    generate_reel_narration_with_optional_agent,
+    generate_reel_preview_scenes,
     generate_script_with_optional_agent,
     recommend_outfit_with_optional_agent,
 )
 from app.config import get_settings
-from app.media.pipeline import build_anchor_scenes, build_media_prompts
 from app.schemas.assistant import AssistantTurnResponse, ChatContext
-from app.schemas.media import GenerateVideoRequest
+from app.schemas.media import GenerateVideoRequest, ReelVideoScenePayload
+from app.schemas.reel_preview import PreviewReelCopyRequest
 from app.schemas.wardrobe import GarmentRecord
 from app.services.store import get_store
 from app.services.video_generation import run_generate_video
@@ -96,41 +96,64 @@ async def _do_script(
 async def _do_preview_reel(context: ChatContext, wardrobe: list[GarmentRecord], actions: list[str]) -> AssistantTurnResponse:
     outfit_summary = context.outfit_summary or "a clean minimalist outfit"
     scene = f"{outfit_summary}. Runway walk-through with natural light and slow pan."
-
-    narr = await generate_reel_narration_with_optional_agent(
-        outfit_summary=scene,
-        face_anchor_present=bool(context.face_anchor_path),
-        user_voice=None,
-    )
-    prompts = build_media_prompts(outfit=None, narrative=scene, duration_seconds=30)
-    anchors = [g.image_path for g in wardrobe if str(g.image_path).startswith("uploads/")][:4]
-    build_anchor_scenes(
-        anchor_paths=anchors,
+    anchors = [g.image_path for g in wardrobe if str(g.image_path).startswith("uploads/")][:8]
+    logline, vp, _scenes = await generate_reel_preview_scenes(
         scene_prompt=scene,
-        narration=narr,
+        duration_seconds=30,
         face_anchor_path=context.face_anchor_path,
+        wardrobe_anchor_paths=anchors,
     )
     actions.append("preview_reel_copy")
     return AssistantTurnResponse(
         reply=(
-            f"**Runway description:** {prompts.storyboard.logline}\n\n"
-            f"**Narration:** {narr}\n\n"
-            "_Open Simulation to edit per-scene lines and render video._"
+            f"**Runway logline:** {logline}\n\n"
+            f"_Open Simulation to edit scenes and render video._\n\n`{vp[:400]}…`"
         ),
         actions=actions,
     )
 
 
 async def _do_render_video(context: ChatContext, wardrobe: list[GarmentRecord], actions: list[str]) -> AssistantTurnResponse:
+    # Use the user's message (movie idea) when available; otherwise fall back to outfit summary.
     outfit_summary = context.outfit_summary or "neutral top, neutral bottom, neutral shoes"
-    scene = f"{outfit_summary}. Runway walk-through with natural light and slow pan."
+    scene = outfit_summary
     anchors = [g.image_path for g in wardrobe if str(g.image_path).startswith("uploads/")]
+    if not (context.face_anchor_path or "").strip():
+        return AssistantTurnResponse(
+            reply="I can do that. Please attach a **face anchor selfie** first (required), then tell me the movie idea again.",
+            actions=actions,
+        )
+
+    # Generate scenes (with images + grounded descriptions), then render a stitched MP4.
+    from app.routers import media as media_router
+    scenes_resp = await media_router.generate_scenes(
+        PreviewReelCopyRequest(
+            scene_prompt=scene,
+            idealization=None,
+            anchor_image_paths=anchors,
+            face_anchor_path=context.face_anchor_path,
+            duration_seconds=30,
+            face_anchor_present=True,
+        )
+    )
+    scene_drafts = scenes_resp.scenes
+    scene_payloads = [
+        ReelVideoScenePayload(
+            anchor_image_path=s.anchor_image_path,
+            anchor_type=s.anchor_type,
+            description=s.description,
+            duration_seconds=s.duration_seconds,
+            render_image_path=s.generated_image_path,
+        )
+        for s in scene_drafts
+    ]
     req = GenerateVideoRequest(
         scene_prompt=scene,
         anchor_image_paths=anchors,
         face_anchor_image_path=context.face_anchor_path,
         duration_seconds=30,
-        narration_text=None,
+        require_fmv=True,
+        scenes=scene_payloads,
     )
     vid = await run_generate_video(req)
     actions.append("generate_video")
@@ -203,7 +226,10 @@ async def _dispatch_concierge(
         )
 
     if co.action == "render_video":
-        res = await _do_render_video(context, wardrobe, actions)
+        # Treat user's text as the movie idea / cinematography brief.
+        msg_scene = message.strip() or (context.outfit_summary or "")
+        ctx2 = context.model_copy(update={"outfit_summary": msg_scene})
+        res = await _do_render_video(ctx2, wardrobe, actions)
         return AssistantTurnResponse(
             reply=f"{co.reply}\n\n{res.reply}",
             actions=res.actions,
