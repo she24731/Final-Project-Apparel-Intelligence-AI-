@@ -24,6 +24,22 @@ def _resolve_local_image(settings, p: str) -> Path | None:
     return None
 
 
+def _motionify_scene_prompt(*, base: str, idx: int, total: int) -> str:
+    """
+    Convert a mostly-visual scene beat into a motion-first prompt for real video generation.
+    """
+    b = (base or "").strip() or "High-intensity action trailer beat."
+    return (
+        "FULL MOTION VIDEO (FMV). Every pixel changes over time. No still frames, no slideshow, no ken-burns zoom/pan.\n"
+        "Cinematography: aggressive dolly-in/push-in, fast tracking shots, parallax, rack focus, "
+        "fluid character movement, realistic motion blur.\n"
+        "Physics: hair + fabric move with wind; cloth drape responds to body motion; objects interact with inertia; "
+        "shadows/reflections update continuously.\n"
+        f"Beat {idx+1}/{total}: {b}\n"
+        "Constraints: keep the same face-anchor identity and keep the outfit consistent across time.\n"
+    )
+
+
 def _slideshow_fallback_mp4(*, req: GenerateVideoRequest, job_id: str) -> str | None:
     """
     Build a lightweight slideshow MP4 from anchor stills.
@@ -177,6 +193,87 @@ def _pick_music_preset(movie_idea: str) -> str:
     # Stable fallback based on hash, to avoid always identical “default”.
     h = int(hashlib.sha256(t.encode("utf-8")).hexdigest(), 16) if t else 0
     return ("action", "suspense", "romance", "cyber")[h % 4]
+
+
+def _lyria_prompt(*, movie_idea: str, preset: str) -> str:
+    """
+    Lyria prompting prefers concrete musical direction (genre/mood/instruments/tempo).
+    We keep this instrumental so it works reliably as a background bed.
+    """
+    idea = (movie_idea or "").strip()
+    if preset == "action":
+        return (
+            "Create a 30-second high-energy cinematic action trailer music clip. "
+            "Driving percussion, pulsing bass, sharp string ostinatos, brass stabs, "
+            "riser impacts, clean transitions. Instrumental only (no vocals). "
+            f"Context: {idea}"
+        )
+    if preset == "suspense":
+        return (
+            "Create a 30-second suspense / spy-thriller underscore. "
+            "Tight rhythmic pulses, muted low strings, subtle impacts, rising tension, "
+            "clean modern sound design. Instrumental only (no vocals). "
+            f"Context: {idea}"
+        )
+    if preset == "romance":
+        return (
+            "Create a 30-second romantic cinematic underscore. "
+            "Warm strings, gentle piano, soft swells, hopeful cadence. "
+            "Instrumental only (no vocals). "
+            f"Context: {idea}"
+        )
+    if preset == "cyber":
+        return (
+            "Create a 30-second cyberpunk action underscore. "
+            "Glitchy synth bass, arpeggiators, tight drums, futuristic textures. "
+            "Instrumental only (no vocals). "
+            f"Context: {idea}"
+        )
+    return f"Create a 30-second cinematic instrumental music bed (no vocals). Context: {idea}"
+
+
+def _generate_lyria_music_mp3(*, out_path: Path, movie_idea: str) -> tuple[bool, str | None]:
+    """
+    Generate a 30s MP3 bed with Gemini Lyria 3 Clip.
+    Returns False if the SDK/model/quota isn't available, so callers can fall back.
+    """
+    settings = get_settings()
+    if not settings.gemini_api_key or not settings.gemini_api_key.strip():
+        return False, "missing GEMINI_API_KEY"
+    try:
+        from google import genai  # type: ignore
+        from google.genai import types  # type: ignore
+    except Exception:
+        return False, "google-genai SDK missing"
+
+    preset = _pick_music_preset(movie_idea)
+    prompt = _lyria_prompt(movie_idea=movie_idea, preset=preset)
+
+    try:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        resp = client.models.generate_content(
+            model="lyria-3-clip-preview",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                # Lyria 3 Clip returns MP3 by default; specifying response_mime_type
+                # can be rejected for this model.
+                response_modalities=["AUDIO", "TEXT"],
+            ),
+        )
+        audio_data = None
+        for part in (getattr(resp, "parts", None) or []):
+            inline = getattr(part, "inline_data", None)
+            if inline is not None and getattr(inline, "data", None):
+                audio_data = inline.data
+                break
+        if not audio_data:
+            return False, "no audio bytes returned"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(audio_data)
+        ok = out_path.exists() and out_path.stat().st_size > 4096
+        return (ok, None) if ok else (False, "audio file too small")
+    except Exception as e:
+        return False, str(e)
 
 
 def _generate_default_music(*, out_path: Path, duration_s: int, movie_idea: str) -> bool:
@@ -528,7 +625,18 @@ async def run_generate_video(body: GenerateVideoRequest) -> GenerateVideoRespons
     if body.scenes and len(body.scenes) > 0:
         stitched = " | ".join(s.description for s in body.scenes)
         prompts = build_media_prompts(outfit=None, narrative=stitched, duration_seconds=body.duration_seconds)
-        req = body
+        if body.require_fmv:
+            total = len(body.scenes)
+            req = body.model_copy(
+                update={
+                    "scenes": [
+                        s.model_copy(update={"description": _motionify_scene_prompt(base=s.description, idx=i, total=total)})
+                        for i, s in enumerate(body.scenes)
+                    ]
+                }
+            )
+        else:
+            req = body
     else:
         prompts = build_media_prompts(outfit=None, narrative=body.scene_prompt, duration_seconds=body.duration_seconds)
         req = body
@@ -536,25 +644,35 @@ async def run_generate_video(body: GenerateVideoRequest) -> GenerateVideoRespons
     # Prefer real dynamic video providers when available; otherwise generate a local animated reel.
     try:
         res = await provider.generate(req=req, prompts=prompts)
-    except Exception:
+    except Exception as e:
         res = GenerateVideoResponse(
             status="failed",
             job_id="",
-            preview_message="Video provider failed; falling back to local animation.",
+            preview_message=f"Video provider failed: {e!s}. Falling back to local animation.",
             video_url=None,
             provider=provider.name,
             description=prompts.storyboard.logline,
             video_prompt=prompts.video_prompt,
         )
 
-    # If user requires full-motion video, fail closed unless a real video provider returned an MP4.
-    if body.require_fmv and (res.video_url is None or res.provider != "gemini_video"):
+    def _looks_like_quota_error(s: str) -> bool:
+        t = (s or "").lower()
+        return ("resource_exhausted" in t) or ("exceeded your current quota" in t) or ("rate limit" in t) or ("code': 429" in t) or ("code\": 429" in t)
+
+    # If user requires FMV, we normally fail closed; however, when the provider is quota-limited (429),
+    # automatically downgrade to local fallback (clearly labeled) so the demo flow isn't blocked.
+    allow_fallback = body.require_fmv and _looks_like_quota_error(res.preview_message or "")
+
+    if body.require_fmv and (res.video_url is None or res.provider != "gemini_video") and (not allow_fallback):
+        detail = (res.preview_message or "").strip()
+        extra = f" Provider detail: {detail}" if detail else ""
         return GenerateVideoResponse(
             status="failed",
             job_id=res.job_id or "",
             preview_message=(
                 "Full-motion video (FMV) was required, but the video provider did not return a real motion clip. "
                 "Enable a real video provider (e.g. `MEDIA_PROVIDER=gemini_video` with Veo access) and try again."
+                + extra
             ),
             video_url=None,
             provider=res.provider or provider.name,
@@ -567,10 +685,15 @@ async def run_generate_video(body: GenerateVideoRequest) -> GenerateVideoRespons
         job_id = os.urandom(8).hex()
         animated_url = _local_animated_reel_mp4(req=req, job_id=job_id)
         if animated_url:
+            msg = "Generated a continuous animated multi-scene reel (motion + crossfades)."
+            if allow_fallback:
+                msg = (
+                    "FMV provider quota-limited (429). Fell back to local animated reel (NOT full-motion model video)."
+                )
             res = GenerateVideoResponse(
                 status="completed",
                 job_id=job_id,
-                preview_message="Generated a continuous animated multi-scene reel (motion + crossfades).",
+                preview_message=msg,
                 video_url=animated_url,
                 provider="local_animated",
                 description=prompts.storyboard.logline,
@@ -586,13 +709,23 @@ async def run_generate_video(body: GenerateVideoRequest) -> GenerateVideoRespons
             local_video = (settings.data_dir / rel_video).resolve()
             out_dir = settings.generated_media_dir
             out_dir.mkdir(parents=True, exist_ok=True)
-            default_music = out_dir / f"{Path(local_video).stem}_bgm.m4a"
-            if _generate_default_music(
-                out_path=default_music,
-                duration_s=int(body.duration_seconds or 30),
-                movie_idea=body.scene_prompt or "",
-            ):
-                bg_rel = f"generated_media/{default_music.name}"
+            # Prefer Gemini Lyria (real music) when available.
+            lyria_music = out_dir / f"{Path(local_video).stem}_lyria.mp3"
+            ok, lyria_err = _generate_lyria_music_mp3(out_path=lyria_music, movie_idea=body.scene_prompt or "")
+            if ok:
+                bg_rel = f"generated_media/{lyria_music.name}"
+            else:
+                default_music = out_dir / f"{Path(local_video).stem}_bgm.m4a"
+                if _generate_default_music(
+                    out_path=default_music,
+                    duration_s=int(body.duration_seconds or 30),
+                    movie_idea=body.scene_prompt or "",
+                ):
+                    bg_rel = f"generated_media/{default_music.name}"
+                    # Helpful signal in UI logs/debugging (kept short).
+                    if lyria_err and (res.preview_message or ""):
+                        res.preview_message = (res.preview_message[:460] + "…") if len(res.preview_message) > 480 else res.preview_message
+                        res.preview_message = f"{res.preview_message}\n(Lyria music unavailable: {lyria_err})"
 
         if bg_rel and res.video_url:
             rel_video = res.video_url.lstrip("/")

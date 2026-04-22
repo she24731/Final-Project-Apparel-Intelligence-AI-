@@ -161,7 +161,18 @@ export function RunwayReelPreviewPanel({
   };
 
   const runRender = async () => {
-    if (!scenePrompt.trim()) return;
+    if (!scenePrompt.trim()) {
+      setCopyErr('Please enter a “Movie idea” first (one sentence: concept + vibe).');
+      return;
+    }
+    if (!faceAnchorPath) {
+      setCopyErr("Please upload a face anchor selfie first (required for FMV).");
+      return;
+    }
+    if (!wardrobeAnchors.length) {
+      setCopyErr("Pick an outfit first (Style → Recommend outfit), so we have garment anchors.");
+      return;
+    }
     const scenePayload: ReelVideoScenePayload[] | undefined =
       scenes.length > 0
         ? scenes.map((s) => ({
@@ -178,6 +189,7 @@ export function RunwayReelPreviewPanel({
       face_anchor_image_path: faceAnchorPath,
       duration_seconds: 30,
       background_music_path: musicPath,
+      require_fmv: true,
       scenes: scenePayload,
     });
   };
@@ -193,7 +205,7 @@ export function RunwayReelPreviewPanel({
         <div className="flex flex-wrap justify-end gap-2">
           <button
             type="button"
-            disabled={busy || copyBusy || !recommendation}
+            disabled={busy || copyBusy}
             onClick={() => void runGenerateScenes()}
             className="rounded-lg border border-line bg-[#E8E8E8] px-3 py-1.5 text-xs font-semibold text-black hover:border-accent/50 disabled:opacity-40"
           >
@@ -201,7 +213,7 @@ export function RunwayReelPreviewPanel({
           </button>
           <button
             type="button"
-            disabled={busy || !recommendation}
+            disabled={busy}
             onClick={() => void runRender()}
             className="rounded-lg border border-accent/40 bg-[#C8A96A]/10 px-3 py-1.5 text-xs font-semibold text-black hover:bg-[#C8A96A]/20 disabled:opacity-40"
           >
@@ -354,7 +366,7 @@ export function RunwayReelPreviewPanel({
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent/90">Scenes for ~30s reel</p>
               <p className="text-[11px] text-black/45">{scenes.length} shot{scenes.length === 1 ? "" : "s"} · edit each beat, then render</p>
             </div>
-            {scenes.map((s, idx) => (
+            {scenes.slice(0, 5).map((s, idx) => (
               <div
                 key={`${s.anchor_image_path ?? "x"}-${idx}`}
                 className="rounded-2xl border border-accent/20 bg-[#E8E8E8]/30 p-4"
