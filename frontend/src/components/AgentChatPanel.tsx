@@ -18,18 +18,18 @@ export function AgentChatPanel({ recommendation }: { recommendation: RecommendOu
 
   return (
     <Card title="Stylist chat" subtitle="Ask for alternatives, tweaks, or a second opinion.">
-      <div className="mb-4 rounded-xl border border-line bg-ink-950/40 p-4 text-sm text-mist/75">
-        <span className="font-semibold text-mist">Stylist:</span> {starter}
+      <div className="mb-4 rounded-xl border border-line bg-[#E8E8E8] p-4 text-sm text-black">
+        <span className="font-semibold text-black">Stylist:</span> {starter}
       </div>
 
       <div className="max-h-64 space-y-3 overflow-auto pr-1">
         {turns.length === 0 ? (
-          <p className="text-xs text-mist/45">No messages yet.</p>
+          <p className="text-xs text-black/45">No messages yet.</p>
         ) : (
           turns.map((t) => (
-            <div key={t.id} className={`rounded-xl border px-3 py-2 text-sm ${t.role === "user" ? "border-line bg-ink-950" : "border-accent/25 bg-ink-900"}`}>
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-mist/40">{t.role}</p>
-              <p className="mt-1 text-mist/85">{t.content}</p>
+            <div key={t.id} className={`rounded-xl border px-3 py-2 text-sm ${t.role === "user" ? "border-line bg-[#E8E8E8]" : "border-accent/25 bg-[#F5F5F5]`}>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-black/40">{t.role}</p>
+              <p className="mt-1 text-black/85">{t.content}</p>
             </div>
           ))
         )}
@@ -39,7 +39,7 @@ export function AgentChatPanel({ recommendation }: { recommendation: RecommendOu
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          className="flex-1 rounded-xl border border-line bg-ink-950 px-3 py-2 text-sm text-mist outline-none ring-accent/30 focus:ring-2"
+          className="flex-1 rounded-xl border border-line bg-[#F5F5F5] px-3 py-2 text-sm text-black outline-none ring-accent/30 focus:ring-2"
           placeholder="Ask the stylist…"
         />
         <button
@@ -60,7 +60,7 @@ export function AgentChatPanel({ recommendation }: { recommendation: RecommendOu
             };
             setTurns((prev) => [...prev, user, assistant]);
           }}
-          className="rounded-xl bg-mist px-4 py-2 text-sm font-semibold text-ink-950"
+          className="rounded-xl bg-[#C8A96A] px-4 py-2 text-sm font-semibold text-black"
         >
           Send
         </button>

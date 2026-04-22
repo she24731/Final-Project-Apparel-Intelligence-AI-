@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, type AppRoute } from "@/components/layout/AppShell";
 import { ChatWidget } from "@/components/ChatWidget";
 import { ImageLightboxProvider } from "@/components/ui/ImageLightbox";
@@ -79,14 +79,14 @@ export default function App() {
   const wardrobe = useMemo(() => [...serverWardrobe, ...localWardrobe], [serverWardrobe, localWardrobe]);
   const serverWardrobeIds = useMemo(() => serverWardrobe.map((g) => g.id), [serverWardrobe]);
 
-  const refreshServerWardrobe = async () => {
+  const refreshServerWardrobe = useCallback(async () => {
     try {
       const items = await apiGet<GarmentRecord[]>("/garments");
       setServerWardrobe(items);
     } catch {
       // If server isn't reachable, keep whatever we have.
     }
-  };
+  }, []);
 
   // NOTE: For this project demo, we keep the wardrobe session-scoped.
   // That means on refresh we start with an empty "Your wardrobe" list, even if the backend
@@ -182,7 +182,7 @@ export default function App() {
         user_preference: preference.length ? preference : null,
       });
       setRecommendation(res);
-    } catch (e) {
+    } catch {
       setErr("rec", "Couldn’t generate a live recommendation. Showing a demo result.");
       setRecommendation(mockRecommendation);
     } finally {
@@ -199,7 +199,7 @@ export default function App() {
         wardrobe_item_ids: serverWardrobeIds,
       });
       setPurchase(res);
-    } catch (e) {
+    } catch {
       setErr("pur", "Couldn’t run a live analysis. Showing a demo result.");
       setPurchase(mockPurchase);
     } finally {
@@ -243,7 +243,7 @@ export default function App() {
         lastScriptTextRef.current = nextText;
         setScript(res);
       }
-    } catch (e) {
+    } catch {
       setErr("scr", "Couldn’t generate live copy. Showing a demo script.");
       setScript(mockScript);
     } finally {
@@ -261,7 +261,7 @@ export default function App() {
       }
       const res = await apiPostJson<GenerateVideoResponse>("/generate-video", body);
       setVideo(res);
-    } catch (e) {
+    } catch {
       setErr("vid", "Couldn’t generate a live preview. Showing a demo preview.");
       setVideo(mockVideo);
     } finally {

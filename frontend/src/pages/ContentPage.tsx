@@ -44,14 +44,17 @@ export function ContentPage({
   return (
     <div className="space-y-10">
       <section>
-        <h2 className="text-2xl font-semibold tracking-tight text-mist md:text-3xl">Simulation</h2>
-        <p className="mt-2 text-sm text-mist/65">Turn an outfit into a script and a generated reel preview.</p>
+        <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-black md:text-3xl">
+          <span aria-hidden="true">🎬</span>
+          <span>Simulation</span>
+        </h2>
+        <p className="mt-2 text-sm text-black/70">Turn an outfit into a script and a generated reel preview.</p>
       </section>
 
       {!hasOutfit ? (
-        <div className="rounded-3xl border border-dashed border-line/80 bg-ink-950/20 p-10 text-center">
-          <p className="text-sm text-mist/70">No outfit selected yet.</p>
-          <p className="mt-2 text-xs text-mist/45">Pick an outfit from Style or Buy Analyzer, then come back here.</p>
+        <div className="rounded-3xl border border-dashed border-line/80 bg-[#E8E8E8]/40 p-10 text-center">
+          <p className="text-sm text-black/70">No outfit selected yet.</p>
+          <p className="mt-2 text-xs text-black/45">Pick an outfit from Style or Buy Analyzer, then come back here.</p>
         </div>
       ) : null}
 

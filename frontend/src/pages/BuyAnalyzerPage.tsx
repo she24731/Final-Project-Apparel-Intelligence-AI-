@@ -23,8 +23,11 @@ export function BuyAnalyzerPage({
   return (
     <div className="space-y-10">
       <section>
-        <h2 className="text-2xl font-semibold tracking-tight text-mist md:text-3xl">Buy Analyzer</h2>
-        <p className="mt-2 text-sm text-mist/65">A fast ROI read: compatibility, versatility, and redundancy.</p>
+        <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-black md:text-3xl">
+          <span aria-hidden="true">🛍️</span>
+          <span>Buy Analyzer</span>
+        </h2>
+        <p className="mt-2 text-sm text-black/70">A fast ROI read: compatibility, versatility, and redundancy.</p>
       </section>
       <BuyOrSkipAnalyzer
         wardrobe={wardrobe}

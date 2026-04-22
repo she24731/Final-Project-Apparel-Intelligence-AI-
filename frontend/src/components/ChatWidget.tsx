@@ -82,34 +82,34 @@ export function ChatWidget({
   return (
     <div className="fixed bottom-6 right-6 z-50">
       {open ? (
-        <div className="w-[min(100vw-2rem,380px)] overflow-hidden rounded-3xl border border-line bg-ink-900/80 shadow-2xl backdrop-blur">
+        <div className="w-[min(100vw-2rem,380px)] overflow-hidden rounded-3xl border border-line bg-[#F8F6F3] shadow-2xl backdrop-blur">
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-accent">Concierge</p>
-              <p className="mt-1 text-xs text-mist/60">Full app control via chat</p>
+              <p className="mt-1 text-xs text-black/60">Full app control via chat</p>
             </div>
             <button
               type="button"
               onClick={() => setOpen(false)}
-              className="rounded-xl border border-line bg-ink-950 px-3 py-1.5 text-xs font-semibold text-mist/80 hover:border-accent/40"
+              className="rounded-xl border border-line bg-[#E8E8E8] px-3 py-1.5 text-xs font-semibold text-black/80 hover:border-accent/40"
             >
               Close
             </button>
           </div>
 
           <div className="max-h-72 space-y-3 overflow-auto px-5 py-4">
-            <div className="rounded-2xl border border-line bg-ink-950/40 px-4 py-3 text-sm text-mist/80">
-              <span className="font-semibold text-mist">Tip:</span> {starter}
+            <div className="rounded-2xl border border-line bg-[#E8E8E8] px-4 py-3 text-sm text-black">
+              <span className="font-semibold text-black">Tip:</span> {starter}
             </div>
             {turns.map((t) => (
               <div
                 key={t.id}
                 className={[
                   "rounded-2xl border px-4 py-3 text-sm",
-                  t.role === "user" ? "border-line bg-ink-950 text-mist/90" : "border-accent/20 bg-ink-900 text-mist/85",
+                  t.role === "user" ? "border-line bg-[#E8E8E8] text-black/90" : "border-accent/20 bg-[#F5F5F5] text-black/85",
                 ].join(" ")}
               >
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-mist/40">{t.role}</p>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-black/40">{t.role}</p>
                 <p className="mt-1 whitespace-pre-wrap">{t.content}</p>
               </div>
             ))}
@@ -124,14 +124,14 @@ export function ChatWidget({
                     type="button"
                     disabled={busy}
                     onClick={() => setFiles((prev) => prev.filter((_, i) => i !== idx))}
-                    className="rounded-full border border-line bg-ink-950 px-3 py-1.5 text-[11px] font-semibold text-mist/75 hover:border-accent/40 disabled:opacity-40"
+                    className="rounded-full border border-line bg-[#E8E8E8] px-3 py-1.5 text-[11px] font-semibold text-black/75 hover:border-accent/40 disabled:opacity-40"
                     title="Remove attachment"
                   >
                     {f.name.length > 18 ? `${f.name.slice(0, 8)}…${f.name.slice(-7)}` : f.name} ×
                   </button>
                 ))}
                 {files.length > 6 ? (
-                  <span className="text-[11px] font-semibold text-mist/45">+{files.length - 6} more</span>
+                  <span className="text-[11px] font-semibold text-black/45">+{files.length - 6} more</span>
                 ) : null}
                 <button
                   type="button"
@@ -140,7 +140,7 @@ export function ChatWidget({
                     setFiles([]);
                     if (fileRef.current) fileRef.current.value = "";
                   }}
-                  className="ml-auto rounded-full border border-line bg-ink-950 px-3 py-1.5 text-[11px] font-semibold text-mist/60 hover:border-accent/40 disabled:opacity-40"
+                  className="ml-auto rounded-full border border-line bg-[#E8E8E8] px-3 py-1.5 text-[11px] font-semibold text-black/60 hover:border-accent/40 disabled:opacity-40"
                   title="Clear all attachments"
                 >
                   Clear
@@ -163,7 +163,7 @@ export function ChatWidget({
                 type="button"
                 disabled={busy}
                 onClick={() => fileRef.current?.click()}
-                className="rounded-2xl border border-line bg-ink-950 px-4 py-3 text-base font-semibold text-mist/85 hover:border-accent/40 disabled:opacity-40"
+                className="rounded-2xl border border-line bg-[#E8E8E8] px-4 py-3 text-base font-semibold text-black/85 hover:border-accent/40 disabled:opacity-40"
                 title="Add images (selfie first, then clothing)"
               >
                 +
@@ -174,14 +174,14 @@ export function ChatWidget({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) void send();
                 }}
-                className="flex-1 rounded-2xl border border-line bg-ink-950 px-4 py-3 text-sm text-mist outline-none ring-accent/20 placeholder:text-mist/35 focus:ring-2"
+                className="flex-1 rounded-2xl border border-line bg-[#F5F5F5] px-4 py-3 text-sm text-black outline-none ring-accent/20 placeholder:text-black/35 focus:ring-2"
                 placeholder="Ask the concierge…"
               />
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => void send()}
-                className="rounded-2xl bg-mist px-4 py-3 text-sm font-semibold text-ink-950 disabled:opacity-40"
+                className="rounded-2xl bg-[#C8A96A] px-4 py-3 text-sm font-semibold text-black disabled:opacity-40"
               >
                 {busy ? "…" : "Send"}
               </button>

@@ -30,21 +30,21 @@ export function ImageLightboxProvider({ children }: { children: React.ReactNode 
                 src={state.src}
                 controls
                 playsInline
-                className="max-h-[82vh] w-full rounded-3xl border border-line bg-ink-950 object-contain shadow-2xl"
+                className="max-h-[82vh] w-full rounded-3xl border border-line bg-[#F8F6F3] object-contain shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
               />
             ) : (
               <img
                 src={state.src}
                 alt={state.alt ?? "Image preview"}
-                className="max-h-[82vh] w-full rounded-3xl border border-line bg-ink-950 object-contain shadow-2xl"
+                className="max-h-[82vh] w-full rounded-3xl border border-line bg-[#F8F6F3] object-contain shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
               />
             )}
             <button
               type="button"
               onClick={() => setState(null)}
-              className="mt-4 w-full rounded-2xl border border-line bg-ink-950/60 px-4 py-3 text-sm font-semibold text-mist hover:border-accent/50"
+              className="mt-4 w-full rounded-2xl border border-line bg-[#E8E8E8] px-4 py-3 text-sm font-semibold text-black hover:border-accent/50"
             >
               Close
             </button>

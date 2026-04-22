@@ -23,8 +23,11 @@ export function StylePage({
   return (
     <div className="space-y-10">
       <section>
-        <h2 className="text-2xl font-semibold tracking-tight text-mist md:text-3xl">Style</h2>
-        <p className="mt-2 text-sm text-mist/65">Enter the context. We’ll recommend one outfit you can trust.</p>
+        <h2 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-black md:text-3xl">
+          <span aria-hidden="true">✨</span>
+          <span>Style</span>
+        </h2>
+        <p className="mt-2 text-sm text-black/70">Enter the context. We'll recommend one outfit you can trust.</p>
       </section>
 
       <StyleContextBar value={context} onChange={onChange} />
@@ -38,14 +41,14 @@ export function StylePage({
         >
           {busy ? "Recommending…" : "Recommend outfit"}
         </button>
-        {isMissing ? <p className="text-xs text-mist/45">Tip: fill Occasion, Weather, and Vibe for a more tailored result.</p> : null}
+        {isMissing ? <p className="text-xs text-black/45">Tip: fill Occasion, Weather, and Vibe for a more tailored result.</p> : null}
         {error ? <p className="text-sm text-red-300">{error}</p> : null}
       </div>
 
       {!recommendation ? (
-        <div className="rounded-3xl border border-dashed border-line/80 bg-ink-950/20 p-10 text-center">
-          <p className="text-sm text-mist/70">No recommendation yet.</p>
-          <p className="mt-2 text-xs text-mist/45">Upload wardrobe items first, then run “Recommend outfit.”</p>
+        <div className="rounded-3xl border border-dashed border-line/80 bg-[#E8E8E8]/40 p-10 text-center">
+          <p className="text-sm text-black/70">No recommendation yet.</p>
+          <p className="mt-2 text-xs text-black/45">Upload wardrobe items first, then run "Recommend outfit."</p>
         </div>
       ) : (
         <div className="space-y-4">

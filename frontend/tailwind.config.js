@@ -8,12 +8,12 @@ export default {
       },
       colors: {
         ink: {
-          950: "#0B0D10",
-          900: "#12151B",
-          800: "#1B2029",
+          950: "#F5F3F0",
+          900: "#EAE7E2",
+          800: "#E0DCD5",
         },
-        mist: "#E7E9EE",
-        line: "#2A3140",
+        mist: "#2D2D2D",
+        line: "#D4CFCB",
         accent: "#C8A96A",
       },
     },

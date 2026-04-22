@@ -89,12 +89,12 @@ export function NarrativeScriptPanel({
   return (
     <Card title="Script & caption" subtitle="Platform-native copy with creative controls—each click varies the offline template.">
       <div className="flex flex-wrap items-center gap-3">
-        <label className="text-xs text-mist/60">
+        <label className="text-xs text-black/60">
           Platform
           <select
             value={platform}
             onChange={(e) => setPlatform(e.target.value as typeof platform)}
-            className="ml-2 rounded-lg border border-line bg-ink-950 px-2 py-1 text-sm text-mist"
+            className="ml-2 rounded-lg border border-line bg-[#F5F5F5] px-2 py-1 text-sm text-black"
           >
             <option value="linkedin">LinkedIn</option>
             <option value="instagram">Instagram</option>
@@ -117,14 +117,14 @@ export function NarrativeScriptPanel({
               variation_salt: typeof crypto !== "undefined" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
             })
           }
-          className="rounded-xl bg-ink-950 px-4 py-2 text-sm font-semibold text-mist ring-1 ring-line hover:ring-accent/40 disabled:opacity-40"
+          className="rounded-xl bg-[#C8A96A] px-4 py-2 text-sm font-semibold text-black ring-1 ring-line hover:ring-accent/40 disabled:opacity-40"
         >
           {busy ? "Writing…" : "Generate script"}
         </button>
         <button
           type="button"
           onClick={() => setShowCreative((v) => !v)}
-          className="rounded-xl border border-line bg-ink-950 px-3 py-2 text-xs font-semibold text-mist/80 hover:border-accent/40"
+          className="rounded-xl border border-line bg-[#E8E8E8] px-3 py-2 text-xs font-semibold text-black/80 hover:border-accent/40"
         >
           {showCreative ? "Hide creative fields" : "Creative fields"}
         </button>
@@ -141,12 +141,12 @@ export function NarrativeScriptPanel({
               ["Vibe", vibe, setVibe],
             ] as const
           ).map(([label, val, set]) => (
-            <label key={label} className="block text-xs text-mist/55">
+            <label key={label} className="block text-xs text-black/55">
               {label}
               <input
                 value={val}
                 onChange={(e) => set(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-sm text-mist outline-none ring-accent/15 focus:ring-2"
+                className="mt-1 w-full rounded-xl border border-line bg-[#F5F5F5] px-3 py-2 text-sm text-black outline-none ring-accent/15 focus:ring-2"
               />
             </label>
           ))}
@@ -154,13 +154,13 @@ export function NarrativeScriptPanel({
       ) : null}
 
       {!script ? (
-        <p className="mt-4 text-xs text-mist/45">No script yet. Outfit summary: {summary}</p>
+        <p className="mt-4 text-xs text-black/45">No script yet. Outfit summary: {summary}</p>
       ) : (
         <div className="mt-4 space-y-3">
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-mist/85">{script.script}</p>
-          {script.caption ? <p className="text-xs text-mist/60">Caption: {script.caption}</p> : null}
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-black/85">{script.script}</p>
+          {script.caption ? <p className="text-xs text-black/60">Caption: {script.caption}</p> : null}
           {script.hashtags?.length ? (
-            <p className="text-xs text-mist/50">{script.hashtags.join(" ")}</p>
+            <p className="text-xs text-black/50">{script.hashtags.join(" ")}</p>
           ) : null}
 
           <div className="flex flex-wrap gap-2 pt-2">
@@ -168,7 +168,7 @@ export function NarrativeScriptPanel({
               type="button"
               disabled={!!shareBusy}
               onClick={() => void preparePost("linkedin")}
-              className="rounded-lg border border-line bg-ink-950 px-3 py-1.5 text-xs font-semibold text-mist hover:border-accent/45 disabled:opacity-40"
+              className="rounded-lg border border-line bg-[#E8E8E8] px-3 py-1.5 text-xs font-semibold text-black hover:border-accent/45 disabled:opacity-40"
             >
               LinkedIn (copy + share link)
             </button>
@@ -176,7 +176,7 @@ export function NarrativeScriptPanel({
               type="button"
               disabled={!!shareBusy}
               onClick={() => void preparePost("instagram")}
-              className="rounded-lg border border-line bg-ink-950 px-3 py-1.5 text-xs font-semibold text-mist hover:border-accent/45 disabled:opacity-40"
+              className="rounded-lg border border-line bg-[#E8E8E8] px-3 py-1.5 text-xs font-semibold text-black hover:border-accent/45 disabled:opacity-40"
             >
               Instagram (copy + create)
             </button>
@@ -184,12 +184,12 @@ export function NarrativeScriptPanel({
               type="button"
               disabled={!!shareBusy}
               onClick={() => void preparePost("tiktok")}
-              className="rounded-lg border border-line bg-ink-950 px-3 py-1.5 text-xs font-semibold text-mist hover:border-accent/45 disabled:opacity-40"
+              className="rounded-lg border border-line bg-[#E8E8E8] px-3 py-1.5 text-xs font-semibold text-black hover:border-accent/45 disabled:opacity-40"
             >
               TikTok (copy + upload)
             </button>
           </div>
-          <p className="text-[11px] text-mist/40">
+          <p className="text-[11px] text-black/40">
             {shareBusy ? `${shareBusy}…` : "Posting APIs need OAuth apps per network—this flow copies text and opens the best-effort web destination."}
           </p>
         </div>

@@ -20,12 +20,12 @@ export function OccasionContextForm({
 }) {
   const field = (label: string, key: keyof OccasionContext, placeholder: string) => (
     <label className="block space-y-2">
-      <span className="text-xs font-medium text-mist/70">{label}</span>
+      <span className="text-xs font-medium text-black/70">{label}</span>
       <input
         value={value[key]}
         onChange={(e) => onChange({ ...value, [key]: e.target.value })}
         placeholder={placeholder}
-        className="w-full rounded-xl border border-line bg-ink-950 px-3 py-2 text-sm text-mist outline-none ring-accent/30 placeholder:text-mist/35 focus:ring-2"
+        className="w-full rounded-xl border border-line bg-[#F5F5F5] px-3 py-2 text-sm text-black outline-none ring-accent/30 placeholder:text-black/35 focus:ring-2"
       />
     </label>
   );
