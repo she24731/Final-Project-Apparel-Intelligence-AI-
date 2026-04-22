@@ -21,7 +21,7 @@ import type {
 } from "@/types";
 
 export default function App() {
-  const [route, setRoute] = useState<AppRoute>("wardrobe");
+  const [route, setRoute] = useState<AppRoute>("home");
 
   const [serverWardrobe, setServerWardrobe] = useState<GarmentRecord[]>([]);
   const [localWardrobe, setLocalWardrobe] = useState<GarmentRecord[]>([]);
