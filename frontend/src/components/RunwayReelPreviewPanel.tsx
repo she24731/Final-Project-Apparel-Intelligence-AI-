@@ -166,7 +166,7 @@ export function RunwayReelPreviewPanel({
       return;
     }
     if (!faceAnchorPath) {
-      setCopyErr("Please upload a face anchor selfie first (required for FMV).");
+      setCopyErr("Please upload a face anchor selfie first (recommended for best video continuity).");
       return;
     }
     if (!wardrobeAnchors.length) {
@@ -189,7 +189,8 @@ export function RunwayReelPreviewPanel({
       face_anchor_image_path: faceAnchorPath,
       duration_seconds: 30,
       background_music_path: musicPath,
-      require_fmv: true,
+      // If Veo access/quota isn't available, allow local animated fallback so demos never block.
+      require_fmv: false,
       scenes: scenePayload,
     });
   };

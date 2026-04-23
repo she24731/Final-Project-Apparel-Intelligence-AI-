@@ -1,0 +1,56 @@
+flowchart LR
+  %% ===== Styles =====
+  classDef fe fill:#E8F1FF,stroke:#2B6CB0,stroke-width:1.5,color:#0B2545;
+  classDef be fill:#E9FBF1,stroke:#2F855A,stroke-width:1.5,color:#0B2E1A;
+  classDef rag fill:#F3E8FF,stroke:#6B46C1,stroke-width:1.5,color:#2D1B69;
+  classDef ai fill:#FFF3E0,stroke:#C05621,stroke-width:1.5,color:#4A1F0B;
+  classDef store fill:#F7FAFC,stroke:#4A5568,stroke-width:1.2,color:#1A202C;
+
+  %% ===== Frontend =====
+  U[User / Browser]:::fe
+  FE[React 18 + TypeScript<br/>Vite + TailwindCSS]:::fe
+  Pages[Pages<br/>Wardrobe, Style, Buy Analyzer, Content<br/>+ Chat widget]:::fe
+  ApiClient[API Client - fetch<br/>JSON + multipart]:::fe
+
+  U --> FE --> Pages --> ApiClient
+
+  %% ===== Backend =====
+  API[FastAPI - Python 3.11<br/>Uvicorn + CORS<br/>Static: /uploads, /generated_media]:::be
+  Routers[Routers / Endpoints<br/>GET /health<br/>POST /ingest-garment multipart<br/>POST /recommend-outfit<br/>POST /analyze-purchase<br/>POST /generate-script<br/>POST /generate-video<br/>POST /assistant]:::be
+  Schemas[Pydantic v2<br/>+ pydantic-settings<br/>Typed req/resp + env config]:::be
+  Services[Services<br/>Deterministic fallbacks - demo reliability]:::be
+
+  ApiClient -->|HTTP| API --> Routers --> Schemas --> Services
+
+  %% ===== Retrieval (RAG-style) =====
+  RAG[RAG-style Local Retrieval - no web search]:::rag
+  Embed[Deterministic Embeddings pipeline]:::rag
+  VStore[Local Vector Store - in-process<br/>NumPy cosine similarity<br/>demo scale & deterministic]:::rag
+  Corpora[Corpora<br/>Wardrobe embeddings + Style KB snippets]:::rag
+
+  Services -->|retrieve top-k| RAG
+  RAG --> Embed --> VStore --> Corpora
+  Routers -->|/ingest-garment| Corpora
+
+  %% ===== Agents + Providers =====
+  Agents[PydanticAI agents - typed outputs<br/>optional orchestration]:::ai
+  Gemini[Google Gemini API - google-genai SDK<br/>LLM reasoning + TTS + Veo video]:::ai
+  Runway[Runway - stub adapter<br/>future integration path]:::ai
+  MediaTools[MoviePy + Pillow<br/>local post-processing]:::ai
+
+  Services --> Agents
+  Agents --> Gemini
+  Services -->|provider abstraction| Runway
+  Gemini -->|video clips| MediaTools
+
+  %% ===== Local storage =====
+  Data[Local data ./data]:::store
+  Uploads[uploads - garment images]:::store
+  GenMedia[generated_media - MP4]:::store
+
+  API -->|serve| Uploads
+  API -->|serve| GenMedia
+  Data --- Uploads
+  Data --- GenMedia
+  MediaTools -->|write MP4| GenMedia
+  FE <-->|URLs + JSON| API
