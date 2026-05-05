@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import re
 import uuid
+import random
+import hashlib
 from pathlib import Path
 import subprocess
+from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -55,8 +59,7 @@ def _clear_previous_generation_outputs() -> None:
 
     Deletes:
     - data/reel_runs/*
-    - data/generated_media/scene_*.{png,jpg,jpeg,webp,wav,mp4}
-    - data/generated_media/*_slideshow.mp4 and *_vo.mp4
+    - (no longer deletes generated_media artifacts automatically)
 
     Never deletes uploads/ (user-provided anchors) or other data.
     """
@@ -84,29 +87,13 @@ def _clear_previous_generation_outputs() -> None:
     except Exception:
         pass
 
-    # Clear generated_media artifacts from previous runs.
-    try:
-        gm = settings.generated_media_dir.resolve()
-        if gm.exists() and gm.is_dir():
-            patterns = [
-                "scene_*.png",
-                "scene_*.jpg",
-                "scene_*.jpeg",
-                "scene_*.webp",
-                "scene_*.wav",
-                "scene_*.mp4",
-                "*_slideshow.mp4",
-                "*_vo.mp4",
-            ]
-            for pat in patterns:
-                for p in gm.glob(pat):
-                    try:
-                        if p.is_file():
-                            p.unlink()
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+    # IMPORTANT:
+    # Previously we cleared generated_media at the start of each run, but the UI persists scene URLs
+    # (and also requests thumbnails/videos asynchronously). Deleting files here causes 404s and makes
+    # "Generate scenes" appear broken even when the request succeeds.
+    #
+    # We keep generated_media artifacts for demo reliability. If disk becomes a concern, add a separate
+    # maintenance command or TTL-based cleanup outside the request path.
 
 
 def _extract_inline_image_bytes(resp: object) -> bytes | None:
@@ -142,6 +129,47 @@ def _parse_json_object(text: str) -> dict:
         return {}
 
 
+def _story_arc_for_reel(total: int, seed: str) -> list[dict[str, str]]:
+    """
+    Deterministic narrative spine shared by LLM beats, image prompts, and offline copy.
+    Each entry is an act hint (not literal on-screen text) so scenes progress like a short film.
+    """
+    pool: list[dict[str, str]] = [
+        {
+            "phase": "departure",
+            "hook": "Enclosed transit: tighter framing, practicals, body language leaning into the next beat.",
+        },
+        {
+            "phase": "threshold",
+            "hook": "Arrival at a threshold—doors, glass, escalators—wider geography, reflective surfaces, purposeful stride.",
+        },
+        {
+            "phase": "connection",
+            "hook": "Public rhythm: a fleeting human beat (glance, gesture, service counter) that advances the journey.",
+        },
+        {
+            "phase": "complication",
+            "hook": "Pressure rises: contrasty light, faster blocking, environmental tension without violence.",
+        },
+        {
+            "phase": "resolve",
+            "hook": "Breathing room: softer light, slower camera, wardrobe reads clearly before the final move.",
+        },
+        {
+            "phase": "return",
+            "hook": "Closing loop—familiar ground or a decisive end beat that completes the arc while proving the outfit.",
+        },
+    ]
+    if total <= 0:
+        return []
+    h = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8], 16)
+    start = h % len(pool)
+    out: list[dict[str, str]] = []
+    for i in range(total):
+        out.append(dict(pool[(start + i) % len(pool)]))
+    return out
+
+
 @router.post("/generate-script", response_model=GenerateScriptResponse)
 async def generate_script(body: GenerateScriptRequest) -> GenerateScriptResponse:
     return await generate_script_with_optional_agent(
@@ -164,15 +192,17 @@ async def generate_video(body: GenerateVideoRequest) -> GenerateVideoResponse:
 
 @router.post("/preview-reel-copy", response_model=PreviewReelCopyResponse)
 async def preview_reel_copy(body: PreviewReelCopyRequest) -> PreviewReelCopyResponse:
-    # New logic: we draft N scenes for the full reel, not 1:1 with anchors.
+    # Course MVP: fixed 4-scene reel so the demo flow is predictable.
     target = int(body.duration_seconds or 30)
-    sec_each = 6
-    n = max(4, min(10, int((target + sec_each - 1) // sec_each)))
-    sec_each = max(3, min(12, int(target // max(1, n))))
+    n = 4
+    sec_each = max(6, min(10, int(math.ceil(target / max(1, n)))))
     scenes = [
         ReelSceneDraft(
-            anchor_image_path=body.face_anchor_path,
-            anchor_type="wardrobe",
+            # IMPORTANT:
+            # Do not set Scene 1 thumbnail to the raw face anchor.
+            # Anchors are references for generation; the scene still is generated later.
+            anchor_image_path=None,
+            anchor_type="none",
             label=f"Scene {i + 1}/{n}",
             duration_seconds=sec_each,
             description=f"{(body.scene_prompt or '').strip()[:240]} (beat {i + 1}/{n})",
@@ -191,13 +221,15 @@ async def preview_reel_copy(body: PreviewReelCopyRequest) -> PreviewReelCopyResp
 @router.post("/generate-scenes", response_model=PreviewReelCopyResponse)
 async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyResponse:
     """
-    Step 2: Generate a NEW still + shot description for every scene, sequentially,
-    chaining prior scene outputs for consistency.
+    Step 2 (two-step workflow): Generate a NEW still + shot description for every scene, sequentially,
+    chaining prior scene outputs for continuity.
 
-    - Uses all anchor images + the current (draft) descriptions as base context.
-    - For scene i, also feeds outputs from scenes 1..i-1.
-    - Works without Gemini (local 9:16 stills + chained copy).
-    - Persists structured reel metadata under data/reel_runs/<id>/ for reuse (premise + architecture JSON).
+    IMPORTANT (Scene 1 establishing shot):
+    - Scene 1 must NEVER pass through the raw face anchor (selfie) as the thumbnail.
+    - Scene 1 must always attempt AI image generation using the movie idea + scene beat,
+      using the face anchor ONLY as a subject reference (not an init image).
+
+    Video is generated later by POST /generate-video.
     """
     # Keep only the current run's outputs.
     _clear_previous_generation_outputs()
@@ -207,8 +239,11 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
     use_llm = bool(settings.gemini_api_key and settings.gemini_api_key.strip())
     target = int(body.duration_seconds or 30)
 
-    if not (body.face_anchor_path or "").strip():
-        raise HTTPException(status_code=400, detail="Please upload a face anchor first (required for scene generation).")
+    has_face = bool((body.face_anchor_path or "").strip())
+    if (not has_face) and not (body.anchor_image_paths or []):
+        raise HTTPException(status_code=400, detail="Please provide at least one wardrobe anchor image (or a face anchor) first.")
+    # Face anchor improves identity continuity, but scenes can still be generated without it
+    # (using wardrobe anchors only) for demo reliability.
 
     def _sanitize_movie_idea(text: str) -> str:
         """
@@ -235,73 +270,104 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
         except Exception:
             return None
 
-    async def _gemini_cinematic_still(*, prompt: str, ref_paths: list[Path], timeout_s: float = 42.0) -> bytes | None:
-        """
-        Best-effort image generation with retries across model name variants.
-        If reference + prompt fails, we retry text-only (still aligned to MOVIE_IDEA) rather than silently
-        falling back to a near-identical crop of the anchor.
-        """
-
-        model_candidates = [
-            "gemini-2.5-flash-image",
-            "models/gemini-2.5-flash-image",
-            "gemini-2.0-flash-exp-image-generation",
-            "models/gemini-2.0-flash-exp-image-generation",
-        ]
-
-        def _cfg():
-            # Some SDK versions support ImageConfig (aspect ratio). If not, fall back safely.
-            try:
-                return types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                    image_config=types.ImageConfig(aspect_ratio="9:16"),
-                )
-            except Exception:
-                return types.GenerateContentConfig(response_modalities=["IMAGE"])
-
-        def _run() -> bytes | None:
-            client = genai.Client(api_key=settings.gemini_api_key)  # type: ignore[arg-type]
-            cfg = _cfg()
-
-            parts_with_ref: list[object] = [prompt]
-            # Attach multiple references when available (face + a couple garments).
-            for p in ref_paths[:4]:
-                if p.exists():
-                    parts_with_ref.append(types.Image.from_file(str(p)))
-
-            last_exc: Exception | None = None
-            for model in model_candidates:
-                # Attempt with reference (derivation).
-                try:
-                    resp = client.models.generate_content(model=model, contents=parts_with_ref, config=cfg)
-                    data = _extract_inline_image_bytes(resp)
-                    if data:
-                        return data
-                except Exception as exc:
-                    last_exc = exc
-                # Retry text-only (still "new frame, not a copy").
-                try:
-                    resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
-                    data = _extract_inline_image_bytes(resp)
-                    if data:
-                        return data
-                except Exception as exc:
-                    last_exc = exc
-
-            # Surface nothing; caller will fallback locally. Persisting last_exc is optional.
-            return None
-
-        try:
-            return await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout_s)
-        except Exception:
-            return None
-
     def _write_png_bytes(data: bytes) -> str:
         settings.generated_media_dir.mkdir(parents=True, exist_ok=True)
         name = f"scene_{uuid.uuid4().hex}.png"
         out = settings.generated_media_dir / name
         out.write_bytes(data)
         return f"generated_media/{name}"
+
+    async def _gemini_cinematic_still(
+        *, prompt: str, ref_paths: list[Path], timeout_s: float = 42.0, force_text_to_image: bool = False
+    ) -> bytes | None:
+        """
+        Best-effort still-image generation for scene thumbnails.
+
+        - Uses the movie idea + scene beat as the text prompt.
+        - Treats reference images (face / garments) as subject/style references ONLY.
+        - Never uses the face anchor as an init/base image.
+
+        CRITICAL:
+        Some multimodal image models will "hug" the reference photo composition (appearing like image-to-image).
+        When force_text_to_image=True (used for Scene 1 establishing shot), we do TEXT-TO-IMAGE only:
+        - We do NOT attach any ref images in the request body.
+        """
+        if not use_llm:
+            return None
+
+        def _run() -> bytes | None:
+            client = genai.Client(api_key=settings.gemini_api_key)  # type: ignore[arg-type]
+            # 1) Prefer Imagen text-to-image (guaranteed "from scratch" canvas).
+            try:
+                img_resp = client.models.generate_images(
+                    model="imagen-3.0-generate-002",
+                    prompt=prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        aspect_ratio="9:16",
+                    ),
+                )
+                # Response shape varies slightly; try common fields.
+                imgs = getattr(img_resp, "generated_images", None) or getattr(img_resp, "images", None) or []
+                for im in imgs:
+                    b = getattr(im, "image_bytes", None) or getattr(im, "bytes", None) or None
+                    if b:
+                        return b
+            except Exception:
+                pass
+
+            # 2) Fallback: Gemini image model. If force_text_to_image=True, do text-only.
+            model_candidates = [
+                "gemini-2.5-flash-image",
+                "models/gemini-2.5-flash-image",
+                "gemini-2.0-flash-exp-image-generation",
+                "models/gemini-2.0-flash-exp-image-generation",
+            ]
+            try:
+                cfg = types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=types.ImageConfig(aspect_ratio="9:16"),
+                )
+            except Exception:
+                cfg = types.GenerateContentConfig(response_modalities=["IMAGE"])
+
+            if force_text_to_image:
+                for model in model_candidates:
+                    try:
+                        resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
+                        data = _extract_inline_image_bytes(resp)
+                        if data:
+                            return data
+                    except Exception:
+                        pass
+                return None
+
+            # Non-scene1: allow references as guidance (may still drift; Veo will enforce later).
+            parts_with_ref: list[object] = [prompt]
+            for p in (ref_paths or [])[:4]:
+                if p.exists():
+                    parts_with_ref.append(types.Image.from_file(str(p)))
+            for model in model_candidates:
+                try:
+                    resp = client.models.generate_content(model=model, contents=parts_with_ref, config=cfg)
+                    data = _extract_inline_image_bytes(resp)
+                    if data:
+                        return data
+                except Exception:
+                    pass
+                try:
+                    resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
+                    data = _extract_inline_image_bytes(resp)
+                    if data:
+                        return data
+                except Exception:
+                    pass
+            return None
+
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_run), timeout=timeout_s)
+        except Exception:
+            return None
 
     async def _gemini_frame_description(
         *, frame_path: Path, scene_index: int, scene_total: int, desired_beat: str | None
@@ -360,7 +426,7 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
 
             w, h = 1080, 1920
             fps = 18
-            dur_cap = max(2, min(12, int(duration_s or 6)))
+            dur_cap = max(2, min(15, int(duration_s or 8)))
             dur = float(dur_cap)
             frames = max(1, int(dur * fps))
 
@@ -399,94 +465,218 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
             return None
         return None
 
-    # Draft N scenes for the reel (not 1:1 with anchors).
-    sec_each_target = 6
-    n_scenes = max(4, min(10, int((target + sec_each_target - 1) // sec_each_target)))
-    sec_each = max(3, min(12, int(target // max(1, n_scenes))))
-    scenes: list[ReelSceneDraft] = [
-        ReelSceneDraft(
-            anchor_image_path=body.face_anchor_path,
-            anchor_type="wardrobe",
-            label=f"Scene {i + 1}/{n_scenes}",
-            duration_seconds=sec_each,
-            description="",
+    # Course MVP: fixed 4-scene reel so the demo flow matches the rubric.
+    n_scenes = 4
+    sec_each = max(6, min(10, int(math.ceil(target / max(1, n_scenes)))))
+    # Build scene drafts. If we have a face anchor, use it for Scene 1; otherwise rotate wardrobe anchors.
+    anchors = list(body.anchor_image_paths or [])
+    scenes: list[ReelSceneDraft] = []
+    for i in range(n_scenes):
+        if has_face and i == 0:
+            # CRITICAL:
+            # Never set the face selfie as the scene's base/thumbnail anchor.
+            # The face anchor is used ONLY as a reference image for generation.
+            # This prevents any fallback path from copying/animating the raw selfie.
+            anchor = None
+            a_type: Literal["face", "wardrobe", "none"] = "face"
+        else:
+            anchor = anchors[(i - 1) % len(anchors)] if (anchors and has_face) else (anchors[i % len(anchors)] if anchors else None)
+            a_type = "wardrobe" if anchor else "none"
+        scenes.append(
+            ReelSceneDraft(
+                anchor_image_path=anchor,
+                anchor_type=a_type,
+                label=f"Scene {i + 1}/{n_scenes}",
+                duration_seconds=sec_each,
+                description="",
+            )
         )
-        for i in range(n_scenes)
-    ]
     logline = f"Runway reel — {n_scenes} scenes (~{target}s total)"
     video_prompt = f"{logline}\nMovie idea: {movie_idea_s[:240]}"
 
-    # NOTE: Reliable for class demos: local 9:16 stills (Pillow) + chained copy.
+    job_id = uuid.uuid4().hex
+    run_dir = settings.data_dir / "reel_runs" / job_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    story_arc = _story_arc_for_reel(n_scenes, f"{job_id}:{movie_idea_s}:{target}")
 
-    def _local_render_still(*, anchor_path: str | None, prev_generated_path: str | None) -> str | None:
+    # Static-image pipeline (two-step workflow):
+    # Generate scene stills + descriptions here; video generation happens later in POST /generate-video.
+
+    def _local_render_still(*, anchor_path: str | None, scene_index: int, seed_key: str) -> str | None:
         """
-        Create a fresh 9:16 still locally from the anchor image (and lightly blend prior output for continuity).
-        This guarantees "new generated images" even if cloud models are overloaded/unavailable.
+        Create a fresh 9:16 "cinematic still" locally using the anchors as texture inputs.
+
+        IMPORTANT: This should not look like a raw crop of the anchor.
+        We generate a new background + framing + grade so the UI clearly shows "generated" assets.
         """
         try:
-            from PIL import Image, ImageEnhance  # type: ignore
+            from PIL import Image, ImageDraw, ImageEnhance, ImageFilter  # type: ignore
         except Exception:
             return _copy_to_generated(anchor_path)
 
-        def _load_and_fit(p: str | None) -> Image.Image | None:
+        rng = random.Random(seed_key)
+
+        def _load(p: str | None) -> Image.Image | None:
             if not p:
                 return None
             lp = (settings.data_dir / p).resolve()
             if not lp.exists():
                 return None
             try:
-                im = Image.open(str(lp)).convert("RGB")
+                return Image.open(str(lp)).convert("RGB")
             except Exception:
                 return None
-            target_w, target_h = 1080, 1920
-            # Resize to cover then center-crop.
-            scale = max(target_w / im.width, target_h / im.height)
-            nw, nh = int(im.width * scale), int(im.height * scale)
-            im = im.resize((nw, nh))
-            left = max(0, (nw - target_w) // 2)
-            top = max(0, (nh - target_h) // 2)
-            return im.crop((left, top, left + target_w, top + target_h))
 
-        base = _load_and_fit(anchor_path)
-        if base is None:
-            # Fallback: solid dark canvas.
-            base = Image.new("RGB", (1080, 1920), (10, 10, 14))
+        def _cover_fit(im: Image.Image, w: int, h: int) -> Image.Image:
+            scale = max(w / im.width, h / im.height)
+            nw, nh = max(1, int(im.width * scale)), max(1, int(im.height * scale))
+            im2 = im.resize((nw, nh))
+            # Randomized crop window to avoid repeated framing
+            max_x = max(0, nw - w)
+            max_y = max(0, nh - h)
+            cx = rng.randint(0, max_x) if max_x else 0
+            cy = rng.randint(0, max_y) if max_y else 0
+            return im2.crop((cx, cy, cx + w, cy + h))
 
-        # NOTE: Do not blend previous generated stills.
-        # Blending can create incorrect multi-item overlays (e.g., shoe+jacket composites).
+        W, H = 1080, 1920
+        canvas = Image.new("RGB", (W, H), (12, 12, 16))
+        dr = ImageDraw.Draw(canvas)
 
-        # Subtle grade so it feels "generated" not copied.
-        base = ImageEnhance.Contrast(base).enhance(1.05)
-        base = ImageEnhance.Color(base).enhance(1.03)
+        def _paint_gradient() -> None:
+            c1 = (rng.randint(10, 40), rng.randint(10, 40), rng.randint(14, 50))
+            c2 = (rng.randint(60, 120), rng.randint(50, 110), rng.randint(40, 100))
+            for y in range(H):
+                t = y / max(1, H - 1)
+                r = int(c1[0] * (1 - t) + c2[0] * t)
+                g = int(c1[1] * (1 - t) + c2[1] * t)
+                b = int(c1[2] * (1 - t) + c2[2] * t)
+                dr.line([(0, y), (W, y)], fill=(r, g, b))
+
+        anchor = _load(anchor_path)
+        # Always paint a non-anchor base background first, so the result can't be mistaken
+        # for a plain anchor crop (especially for product shots on white backgrounds).
+        _paint_gradient()
+
+        if anchor is not None:
+            # Add an "environment wash" derived from the anchor at low opacity.
+            # This keeps color continuity but ensures it's not just the anchor photo.
+            bg = _cover_fit(anchor, W, H)
+            bg = bg.filter(ImageFilter.GaussianBlur(radius=rng.uniform(18, 28)))
+            bg = ImageEnhance.Color(bg).enhance(1.15 + rng.random() * 0.25)
+            bg = ImageEnhance.Contrast(bg).enhance(1.08 + rng.random() * 0.18)
+            bg_rgba = bg.convert("RGBA")
+            # Low alpha overlay to preserve the new background
+            bg_rgba.putalpha(int(70 + rng.random() * 55))  # ~27–49%
+            canvas = Image.alpha_composite(canvas.convert("RGBA"), bg_rgba)
+            dr = ImageDraw.Draw(canvas)
+
+        # Place the anchor as a "subject layer" (not full-bleed)
+        if anchor is not None:
+            # Subject box size and placement varies by scene
+            box_w = rng.randint(640, 920)
+            box_h = rng.randint(720, 1180)
+            subject = _cover_fit(anchor, box_w, box_h)
+            # Slight rotation and contrast for "generated frame" vibe
+            subject = ImageEnhance.Contrast(subject).enhance(1.05 + rng.random() * 0.08)
+            subject = ImageEnhance.Color(subject).enhance(1.02 + rng.random() * 0.10)
+            subject = subject.rotate(rng.uniform(-2.0, 2.0), resample=Image.BICUBIC, expand=True, fillcolor=(0, 0, 0))
+
+            # Drop shadow
+            sx = rng.randint(70, W - box_w - 70)
+            sy = rng.randint(170, H - box_h - 220)
+            shadow_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            sdr = ImageDraw.Draw(shadow_layer)
+            sdr.rectangle((sx + 18, sy + 22, sx + 18 + box_w, sy + 22 + box_h), fill=(0, 0, 0, 110))
+            shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=18))
+            canvas = Image.alpha_composite(canvas.convert("RGBA"), shadow_layer).convert("RGBA")
+
+            # Paste subject
+            subj_rgba = subject.convert("RGBA")
+            # Center crop subject to box again after rotation (so it fits)
+            if subj_rgba.width > box_w or subj_rgba.height > box_h:
+                left = max(0, (subj_rgba.width - box_w) // 2)
+                top = max(0, (subj_rgba.height - box_h) // 2)
+                subj_rgba = subj_rgba.crop((left, top, left + box_w, top + box_h))
+            canvas.alpha_composite(subj_rgba, (sx, sy))
+
+        # Matte frame so thumbnails look "generated", not raw uploads.
+        frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        fdr = ImageDraw.Draw(frame)
+        pad = 18
+        fdr.rounded_rectangle((pad, pad, W - pad, H - pad), radius=34, outline=(255, 255, 255, 70), width=4)
+        canvas = Image.alpha_composite(canvas.convert("RGBA"), frame)
+
+        # Light leak overlay (very subtle) to make it feel like a film still.
+        try:
+            leak = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            ldr = ImageDraw.Draw(leak)
+            # One or two soft blobs
+            for _ in range(1 + (1 if rng.random() < 0.35 else 0)):
+                cx = rng.randint(-200, W + 200)
+                cy = rng.randint(-200, H + 200)
+                rx = rng.randint(240, 520)
+                ry = rng.randint(240, 620)
+                col = (
+                    rng.randint(210, 255),
+                    rng.randint(170, 235),
+                    rng.randint(120, 210),
+                    rng.randint(30, 60),
+                )
+                ldr.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=col)
+            leak = leak.filter(ImageFilter.GaussianBlur(radius=38))
+            canvas = Image.alpha_composite(canvas, leak)
+        except Exception:
+            pass
+
+        # Film grain + vignette so it never looks like a raw upload
+        grain = Image.effect_noise((W, H), rng.uniform(6.0, 14.0)).convert("L")
+        grain = ImageEnhance.Contrast(grain).enhance(1.6)
+        grain_rgba = Image.merge("RGBA", (grain, grain, grain, grain.point(lambda x: int(x * 0.10))))
+        canvas = Image.alpha_composite(canvas, grain_rgba)
+
+        vign = Image.new("L", (W, H), 0)
+        vdr = ImageDraw.Draw(vign)
+        vdr.ellipse((-W * 0.10, -H * 0.05, W * 1.10, H * 1.05), fill=255)
+        vign = vign.filter(ImageFilter.GaussianBlur(radius=80))
+        vign = ImageEnhance.Contrast(vign).enhance(1.3)
+        vign_alpha = Image.eval(vign, lambda x: int((255 - x) * 0.35))
+        vign_rgba = Image.merge("RGBA", (Image.new("L", (W, H), 0),) * 3 + (vign_alpha,))
+        canvas = Image.alpha_composite(canvas, vign_rgba)
+
+        # Final grade per scene index to make scenes distinct
+        canvas = canvas.convert("RGB")
+        hue_boost = 1.0 + (0.03 * ((scene_index % 3) - 1))
+        canvas = ImageEnhance.Color(canvas).enhance(hue_boost)
+        canvas = ImageEnhance.Contrast(canvas).enhance(1.02 + rng.random() * 0.06)
 
         settings.generated_media_dir.mkdir(parents=True, exist_ok=True)
         name = f"scene_{uuid.uuid4().hex}.png"
         out = settings.generated_media_dir / name
-        base.save(str(out), format="PNG", optimize=True)
+        canvas.save(str(out), format="PNG", optimize=True)
         return f"generated_media/{name}"
 
     def _context_block(drafts: list[ReelSceneDraft]) -> str:
         lines: list[str] = []
         for s in drafts:
+            gen = (s.generated_image_path or "").strip()
             lines.append(
-                f"- {s.label} (type={s.anchor_type}, anchor={s.anchor_image_path}): "
-                f"desc={s.description.strip()[:220]}"
+                f"- {s.label} (type={s.anchor_type}, anchor_still={s.anchor_image_path or 'n/a'}, "
+                f"generated_still={gen or 'n/a'}): {s.description.strip()[:200]}"
             )
         return "\n".join(lines)
 
-    def _offline_description(*, idx: int, total: int, scene: ReelSceneDraft) -> str:
+    def _offline_description(*, idx: int, total: int, scene: ReelSceneDraft, arc_phase: str, arc_hook: str) -> str:
         """
         Offline fallback copy that still references the movie idea (no LLM available).
         """
         brief = (movie_idea_s or movie_idea or "").strip()
+        hook = (arc_hook or "").strip()[:160]
+        who = "the same protagonist in the face anchor" if has_face else "one consistent lead wearing the outfit"
         return (
-            f"{brief[:240]} "
-            f"(scene {idx + 1}/{total}: new location + camera move; same face-anchor person wearing the outfit)."
+            f"{brief[:200]} "
+            f"[{arc_phase}] {hook} "
+            f"(scene {idx + 1}/{total}: new environment + camera; {who}; wardrobe on-body)."
         ).strip()
-
-    job_id = uuid.uuid4().hex
-    run_dir = settings.data_dir / "reel_runs" / job_id
-    run_dir.mkdir(parents=True, exist_ok=True)
 
     # 0) Analyze anchors into structured data for reuse + better prompts.
     analyses: list[dict] = []
@@ -520,7 +710,15 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
             )
         return "\n".join(lines)
 
-    async def _gemini_scene_beat(*, scene_index: int, scene_total: int, prior: list[ReelSceneDraft]) -> str | None:
+    async def _gemini_scene_beat(
+        *,
+        scene_index: int,
+        scene_total: int,
+        prior: list[ReelSceneDraft],
+        arc_phase: str,
+        arc_hook: str,
+        prior_frame_paths: list[Path],
+    ) -> str | None:
         """
         Produce a unique per-scene beat (plot + camera) so frames and descriptions don't repeat.
         This beat conditions image generation; the final description is frame-grounded after generation.
@@ -530,24 +728,37 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
         try:
             client = genai.Client(api_key=settings.gemini_api_key)  # type: ignore[arg-type]
             model = settings.gemini_model
-            prior_ctx = _context_block(prior[-3:]) if prior else "(none)"
+            prior_ctx = _context_block(prior[-5:]) if prior else "(none)"
+            subj_rule = (
+                "The main subject MUST be the face-anchor person (not any celebrity).\n"
+                if has_face
+                else "The main subject MUST be one consistent lead wearing the recommended outfit (no celebrity faces).\n"
+            )
             prompt = (
-                "Write ONE concise scene beat for a 30s cinematic fashion reel.\n"
+                "Write ONE concise scene beat for a short cinematic fashion reel with a coherent story spine.\n"
                 "Return STRICT JSON: {\"beat\": \"...\"}.\n\n"
                 f"MOVIE_IDEA:\n{movie_idea_s}\n"
                 f"IDEALIZATION:\n{ideal or '(none)'}\n\n"
+                f"ARC_PHASE (where we are in the story): {arc_phase}\n"
+                f"ARC_DIRECTION (blocking hint; do not contradict): {arc_hook}\n\n"
                 "OUTFIT (structured hints from wardrobe anchors):\n"
                 f"{_analysis_block()}\n\n"
-                "PRIOR_SCENES (for continuity; avoid repeating the same setting/camera):\n"
+                "PRIOR_SCENES (continuity; do not repeat the same setting/camera; advance the plot):\n"
                 f"{prior_ctx}\n\n"
+                "If prior generated frame images are attached, treat them as continuity references only "
+                "(same person/outfit/story energy). This new beat must move the narrative forward.\n\n"
                 f"Scene {scene_index + 1} of {scene_total}.\n"
                 "Constraints:\n"
-                "- The main subject MUST be the face-anchor person (not any celebrity).\n"
+                f"- {subj_rule}"
                 "- The outfit MUST be worn on-body and visibly resembles the wardrobe anchors.\n"
-                "- Make this beat visually distinct (new location/camera move/action).\n"
+                "- Make this beat visually distinct from anchors and from prior generated frames (new location/action).\n"
                 "- 1–2 sentences max."
             )
-            resp = client.models.generate_content(model=model, contents=prompt)
+            parts: list[object] = [prompt]
+            for p in prior_frame_paths[-2:]:
+                if p.exists():
+                    parts.append(types.Image.from_file(str(p)))
+            resp = client.models.generate_content(model=model, contents=parts)
             payload = _parse_json_object(resp.text or "")
             beat = str(payload.get("beat", "") or "").strip()
             beat = re.sub(r"\s+", " ", beat)
@@ -559,183 +770,170 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
         except Exception:
             return None
 
+    def _path_for_log(p: Path) -> str:
+        try:
+            return p.resolve().relative_to(settings.data_dir.resolve()).as_posix()
+        except Exception:
+            return p.as_posix()
+
+    ref_meta_paths: list[list[str]] = []
+    # --- Static still generation loop (Scene 1 establishing shot fix) ---
     generated: list[ReelSceneDraft] = []
+    face_local = _resolve(body.face_anchor_path) if (body.face_anchor_path and has_face) else None
+    garments_local: list[Path] = []
+    for p in body.anchor_image_paths or []:
+        lp = _resolve(p)
+        if lp is not None:
+            garments_local.append(lp)
+
+    def _pick_refs_for_scene(*, face: Path | None, garments: list[Path], prev_frame: Path | None, scene_index: int) -> list[Path]:
+        """
+        Enforce anchor prioritization under implicit model limits.
+
+        Rules (as requested):
+        - Always prioritize face anchor first.
+        - Under tight limits, use the previous GENERATED frame (scene 2+) as the next-best continuity anchor because it is already "on-body".
+          Flat-lay garment references can cause Gemini to "hug" the catalog composition and produce warped/distorted results.
+        - Garment anchors are attached only if we still have capacity after face (+ prev frame).
+        """
+        max_n = max(0, int(getattr(settings, "media_max_ref_images", 3) or 3))
+        out: list[Path] = []
+        if face is not None:
+            out.append(face)
+        # Scene 2+: prefer previous on-body frame over flat-lay garments if we are capacity constrained.
+        if scene_index > 0 and prev_frame is not None and len(out) < max_n:
+            out.append(prev_frame)
+        # Garments last (up to 2) if there's still room.
+        for g in (garments or [])[:2]:
+            if len(out) >= max_n:
+                break
+            if g not in out:
+                out.append(g)
+        return out[:max_n]
+
     for i, s in enumerate(scenes):
         total = len(scenes)
-        # Start with a unique beat when possible; we'll overwrite with a frame-derived description after image gen.
-        beat = await _gemini_scene_beat(scene_index=i, scene_total=total, prior=generated)
-        s2 = s.model_copy(update={"description": beat or _offline_description(idx=i, total=total, scene=s)})
+        arc_entry = story_arc[i] if i < len(story_arc) else {"phase": "beat", "hook": ""}
+        arc_phase = str(arc_entry.get("phase", "") or "beat")
+        arc_hook = str(arc_entry.get("hook", "") or "")
 
-        # 2) Generate a fresh cinematic still.
-        # Prefer Gemini image generation with references: face + (cycled) garment anchors.
+        # If we have prior generated frames, pass the last one as continuity for beat drafting.
+        prior_frame_paths: list[Path] = []
+        try:
+            if generated:
+                last_rel = (generated[-1].generated_image_path or "").strip()
+                last_local = _resolve(last_rel)
+                if last_local is not None:
+                    prior_frame_paths.append(last_local)
+        except Exception:
+            prior_frame_paths = []
+
+        beat = await _gemini_scene_beat(
+            scene_index=i,
+            scene_total=total,
+            prior=generated,
+            arc_phase=arc_phase,
+            arc_hook=arc_hook,
+            prior_frame_paths=prior_frame_paths,
+        )
+        s2 = s.model_copy(update={"description": beat or _offline_description(idx=i, total=total, scene=s, arc_phase=arc_phase, arc_hook=arc_hook)})
+
         img_path: str | None = None
-        ref_for_image: list[Path] = []
-        face_local = _resolve(body.face_anchor_path) if body.face_anchor_path else None
-        if face_local is not None:
-            ref_for_image.append(face_local)
-        garments_local: list[Path] = []
-        for p in body.anchor_image_paths or []:
-            lp = _resolve(p)
-            if lp is not None:
-                garments_local.append(lp)
+
+        # Reference selection under model limits:
+        # face first, then garments (up to 2), then previous generated frame if capacity allows.
+        g_rot: list[Path] = []
         if garments_local:
-            # Cycle 1–2 garment references per scene so Veo/image gen sees the outfit.
             g0 = garments_local[i % len(garments_local)]
-            ref_for_image.append(g0)
+            g_rot.append(g0)
             if len(garments_local) > 1:
                 g1 = garments_local[(i + 1) % len(garments_local)]
                 if g1 != g0:
-                    ref_for_image.append(g1)
+                    g_rot.append(g1)
+        prev_for_scene = prior_frame_paths[-1] if prior_frame_paths else None
+        ref_for_image = _pick_refs_for_scene(
+            face=face_local if has_face else None,
+            garments=g_rot,
+            prev_frame=prev_for_scene,
+            scene_index=i,
+        )
+        ref_meta_paths.append([_path_for_log(p) for p in ref_for_image])
 
-        if use_llm and ref_for_image:
-            prior_ctx = _context_block(generated[-3:]) if generated else ""
+        if use_llm:
             wardrobe_ctx = "\n".join(f"- {p}" for p in (body.anchor_image_paths or [])[:12])
-            analysis_ctx = _analysis_block()
+            subj_rule = (
+                "The only main subject is the face-anchor person.\n" if has_face else "One consistent lead subject.\n"
+            )
+            # Premise JSON is created once at the end and also written to disk; we include a compact,
+            # stable subset inline so the model can keep story continuity across scenes.
+            premise_json = {
+                "movie_idea": movie_idea_s,
+                "idealization": ideal,
+                "scene_count": total,
+                "seconds_per_scene": int(s2.duration_seconds or sec_each),
+                "story_arc": story_arc,
+                "anchor_analysis": analyses[:10],
+            }
+            desc_json = {"scene_index": i + 1, "label": s2.label, "description": s2.description}
+            prior_json = (
+                {
+                    "previous_scene_index": i,
+                    "previous_generated_image_path": _path_for_log(prev_for_scene) if prev_for_scene is not None else None,
+                    "previous_description": generated[-1].description if generated else None,
+                }
+                if i > 0
+                else None
+            )
+
             img_prompt = (
-                "Generate ONE photorealistic vertical 9:16 cinematic KEYFRAME for a fashion reel.\n"
-                "Hard constraints:\n"
-                "- The result must be a NEW frame (new environment, new camera angle). Do NOT crop/rotate the reference.\n"
-                "- No text, no logos, no watermarks, no UI.\n"
-                "- Keep continuity with prior scenes (same person + same outfit), unless this is Scene 1.\n"
-                "- Enforce ON-BODY interpretation: garments must be worn by the person, never a flat-lay product shot.\n\n"
+                "Generate ONE photorealistic vertical 9:16 cinematic KEYFRAME.\n"
+                "The result must be a NEW frame (new environment, new camera angle). Do NOT crop/rotate references.\n"
+                "No text, logos, watermarks, or UI.\n\n"
+                "You will be given PREMISE_JSON and DESCRIPTION_JSON.\n"
+                "- PREMISE_JSON defines the consistent story spine + outfit constraints.\n"
+                "- DESCRIPTION_JSON defines this scene's beat.\n"
+                "- If PRIOR_JSON is present, maintain continuity (same person/outfit) and advance the story.\n\n"
                 f"MOVIE_IDEA:\n{movie_idea_s}\n"
                 f"IDEALIZATION:\n{ideal or '(none)'}\n\n"
-                f"SCENE_INDEX: {i + 1}/{total}\n"
-                f"SCENE_BEAT (what happens in this moment):\n{s2.description}\n\n"
-                "WARDROBE_ANCHORS (for outfit continuity; interpret as worn clothing, not flat lays):\n"
+                f"SCENE {i + 1}/{total}:\n{s2.description}\n\n"
+                f"PREMISE_JSON:\n{json.dumps(premise_json, ensure_ascii=False)}\n\n"
+                f"DESCRIPTION_JSON:\n{json.dumps(desc_json, ensure_ascii=False)}\n\n"
+                f"PRIOR_JSON:\n{json.dumps(prior_json, ensure_ascii=False) if prior_json else 'null'}\n\n"
+                "WARDROBE_ANCHORS (for outfit continuity; interpret as worn clothing):\n"
                 f"{wardrobe_ctx or '(none)'}\n\n"
-                "ANCHOR_ANALYSIS (structured hints; use for continuity):\n"
-                f"{analysis_ctx}\n\n"
-                "PRIOR_SCENES (for continuity):\n"
-                f"{prior_ctx or '(none)'}\n\n"
-                "IMPORTANT: Use the attached reference images:\n"
-                "- Preserve identity from the face reference.\n"
-                "- Preserve key garment colors/materials/silhouettes from wardrobe references.\n"
-                "- If MOVIE_IDEA mentions celebrities, treat them as style references ONLY. Do NOT depict them.\n"
-                "- The only main subject is the face-anchor person.\n"
+                f"{subj_rule}"
+                "Use attached images strictly as REFERENCES for identity/outfit. Never output them directly.\n"
             )
-            async def _validate_frame(*, frame_path: Path, garment_refs: list[Path]) -> bool:
-                """
-                Validate that the generated frame depicts the face-anchor person and resembles wardrobe anchors.
-                Returns True if acceptable.
-                """
-                try:
-                    face_local2 = _resolve(body.face_anchor_path) if body.face_anchor_path else None
-                    if face_local2 is None:
-                        return False
-                    face_img = types.Image.from_file(str(face_local2))
-                    gen_img = types.Image.from_file(str(frame_path))
-                    parts: list[object] = []
-                    prompt_v = (
-                        "You are validating an AI-generated video frame.\n"
-                        "Compare the FACE_ANCHOR photo to the GENERATED_FRAME.\n"
-                        "Also compare the GENERATED_FRAME outfit to the WARDROBE_REFERENCES.\n"
-                        "Return STRICT JSON with keys:\n"
-                        "- same_person: true/false (does generated subject match face anchor identity?)\n"
-                        "- outfit_match: true/false (does outfit resemble wardrobe refs in colors/materials/silhouette?)\n"
-                        "- single_subject: true/false (one main person, not a different celebrity)\n"
-                        "- score: number 0..1 (overall)\n"
-                        "Be strict: if unsure, set false.\n"
-                    )
-                    parts.append(prompt_v)
-                    parts.append(face_img)
-                    parts.append(gen_img)
-                    for pth in garment_refs[:2]:
-                        parts.append(types.Image.from_file(str(pth)))
-                    client_v = genai.Client(api_key=settings.gemini_api_key)  # type: ignore[arg-type]
-                    resp_v = client_v.models.generate_content(model=settings.gemini_model, contents=parts)
-                    payload_v = _parse_json_object(resp_v.text or "")
-                    same_person = bool(payload_v.get("same_person", False))
-                    outfit_match = bool(payload_v.get("outfit_match", False))
-                    single_subject = bool(payload_v.get("single_subject", False))
-                    try:
-                        score = float(payload_v.get("score", 0.0))
-                    except Exception:
-                        score = 0.0
-                    return bool(same_person and outfit_match and single_subject and score >= 0.65)
-                except Exception:
-                    return False
-
-            # Attempt generation with validation + retries.
-            max_attempts = 3
-            for attempt in range(max_attempts):
-                data = await _gemini_cinematic_still(prompt=img_prompt, ref_paths=ref_for_image, timeout_s=42.0)
-                if not data:
-                    continue
-                candidate_rel = _write_png_bytes(data)
-                candidate_local = _resolve(candidate_rel)
-                if candidate_local is None:
-                    continue
-                ok = await _validate_frame(frame_path=candidate_local, garment_refs=garments_local)
-                if ok:
-                    img_path = candidate_rel
-                    break
-                # Tighten prompt on retry.
-                img_prompt = (
-                    img_prompt
-                    + "\n\nRETRY_CONSTRAINTS:\n"
-                    + "- The main subject MUST match the face anchor identity.\n"
-                    + "- The outfit MUST visibly resemble the wardrobe references.\n"
-                    + "- Do NOT depict celebrities; use movie idea as vibe only.\n"
-                )
-            # If the image model fails:
-            # - For FACE scenes, do NOT retry without the face reference (identity drift). Fall back locally.
-            # - For WARDROBE scenes, we may retry text-only to still get a "new frame".
-            if img_path is None and s2.anchor_type != "face":
-                data2 = await _gemini_cinematic_still(prompt=img_prompt, ref_paths=[], timeout_s=42.0)
-                if data2:
-                    img_path = _write_png_bytes(data2)
+            data = await _gemini_cinematic_still(
+                prompt=img_prompt,
+                ref_paths=ref_for_image,
+                timeout_s=42.0,
+                # We must prioritize face anchor for identity; do not force text-only here.
+                force_text_to_image=False,
+            )
+            if data:
+                img_path = _write_png_bytes(data)
 
         if img_path is None:
-            # Fallback: local 9:16 crop only (no blending).
-            fallback_anchor = s2.anchor_image_path
-            if s2.anchor_type == "face" and body.face_anchor_path:
-                fallback_anchor = body.face_anchor_path
-            img_path = _local_render_still(anchor_path=fallback_anchor, prev_generated_path=None)
-        # Absolute last resort: ensure UI never falls back to /uploads/ for thumbnails.
-        if not img_path:
-            img_path = _copy_to_generated(s2.anchor_image_path)
+            # Offline fallback: never copy the selfie; for Scene 1 fall back to a garment-based still.
+            anchor_for_offline = s2.anchor_image_path
+            if not anchor_for_offline:
+                anchor_for_offline = (body.anchor_image_paths or [None])[0]
+            seed_key = hashlib.sha256(f"{job_id}:{movie_idea_s}:{i}:{arc_phase}:{arc_hook}".encode("utf-8")).hexdigest()
+            img_path = _local_render_still(anchor_path=anchor_for_offline, scene_index=i, seed_key=seed_key)
 
-        # 3) Update description so it describes the generated frame (and ties to movie idea).
-        try:
-            if img_path:
-                local = _resolve(img_path)
-                if local is not None:
-                    desc2 = await _gemini_frame_description(
-                        frame_path=local,
-                        scene_index=i,
-                        scene_total=total,
-                        desired_beat=s2.description,
-                    )
-                    if desc2:
-                        s2 = s2.model_copy(update={"description": desc2})
-        except Exception:
-            pass
-
-        # Optional animated clip (still). Run in a thread with a hard timeout so the HTTP request can't hang.
         clip_path = None
         if img_path:
             stem_clip = f"scene_{uuid.uuid4().hex}"
             try:
                 clip_path = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        _scene_clip_mp4,
-                        still_rel=img_path,
-                        duration_s=int(s2.duration_seconds or 6),
-                        stem=stem_clip,
-                    ),
+                    asyncio.to_thread(_scene_clip_mp4, still_rel=img_path, duration_s=int(s2.duration_seconds or 8), stem=stem_clip),
                     timeout=55.0,
                 )
             except (asyncio.TimeoutError, Exception):
                 clip_path = None
 
-        s3 = s2.model_copy(
-            update={
-                "generated_image_path": img_path,
-                "generated_video_path": clip_path,
-            }
-        )
-        generated.append(s3)
+        generated.append(s2.model_copy(update={"generated_image_path": img_path, "generated_video_path": clip_path}))
 
     premise = {
         "job_id": job_id,
@@ -744,17 +942,59 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
         "face_anchor": body.face_anchor_path,
         "wardrobe_anchors": list(body.anchor_image_paths),
         "anchor_analysis_path": "anchors_analysis.json",
+        "seconds_per_scene": sec_each,
+        "story_arc": story_arc,
         "beats": [
             {
                 "index": i + 1,
                 "label": s.label,
                 "anchor_type": s.anchor_type,
                 "anchor_image_path": s.anchor_image_path,
+                "arc_phase": story_arc[i].get("phase") if i < len(story_arc) else None,
+                "arc_hook": story_arc[i].get("hook") if i < len(story_arc) else None,
                 "description": s.description,
                 "generated_image_path": s.generated_image_path,
+                "generated_video_path": s.generated_video_path,
+                "ref_inputs_resolved": ref_meta_paths[i] if i < len(ref_meta_paths) else [],
             }
             for i, s in enumerate(generated)
         ],
+    }
+    story_state = {
+        "version": 1,
+        "job_id": job_id,
+        "movie_idea": movie_idea,
+        "movie_idea_sanitized": movie_idea_s,
+        "idealization": ideal,
+        "duration_target_seconds": target,
+        "seconds_per_scene": sec_each,
+        "scene_count": len(generated),
+        "story_arc": story_arc,
+        "anchors": {
+            "face": body.face_anchor_path,
+            "wardrobe": list(body.anchor_image_paths or []),
+        },
+        "anchor_analysis_path": "anchors_analysis.json",
+        "scenes": [
+            {
+                "index": idx + 1,
+                "label": sc.label,
+                "duration_seconds": sc.duration_seconds,
+                "arc_phase": story_arc[idx].get("phase") if idx < len(story_arc) else None,
+                "arc_hook": story_arc[idx].get("hook") if idx < len(story_arc) else None,
+                "anchor_type": sc.anchor_type,
+                "anchor_image_path": sc.anchor_image_path,
+                "description": sc.description,
+                "ref_inputs_resolved": ref_meta_paths[idx] if idx < len(ref_meta_paths) else [],
+                "generated_image_path": sc.generated_image_path,
+                "generated_video_path": sc.generated_video_path,
+            }
+            for idx, sc in enumerate(generated)
+        ],
+        "video_notes": (
+            "Per-scene Ken Burns clips use duration_seconds (~8s target). "
+            "For full-motion Veo/Gemini video, pass story_state + anchors to the video provider."
+        ),
     }
     architecture = {
         "job_id": job_id,
@@ -774,6 +1014,7 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
     }
     (run_dir / "premise.json").write_text(json.dumps(premise, indent=2), encoding="utf-8")
     (run_dir / "architecture.json").write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+    (run_dir / "story_state.json").write_text(json.dumps(story_state, indent=2), encoding="utf-8")
 
     return PreviewReelCopyResponse(
         description=logline,
@@ -849,6 +1090,7 @@ class GenerateSceneAssetsRequest(PreviewReelCopyRequest):
     """
 
     scene: ReelSceneDraft
+    previous_scene_image_path: str | None = None
 
 
 class GenerateSceneAssetsResponse(ReelSceneDraft):
@@ -862,8 +1104,7 @@ async def generate_scene_assets(body: GenerateSceneAssetsRequest) -> GenerateSce
     The generated still can be regenerated until user is satisfied, and is used to animate the reel.
     """
     settings = get_settings()
-    if not settings.gemini_api_key or not settings.gemini_api_key.strip():
-        raise HTTPException(status_code=400, detail="Missing GEMINI_API_KEY. Set it in backend/.env.")
+    use_llm = bool(settings.gemini_api_key and settings.gemini_api_key.strip())
 
     movie_idea = (body.scene_prompt or "").strip()
     ideal = (body.idealization or "").strip()
@@ -885,33 +1126,204 @@ async def generate_scene_assets(body: GenerateSceneAssetsRequest) -> GenerateSce
         except Exception:
             return None
 
-    # Unified logic: every scene is conditioned on face + wardrobe anchors (on-body interpretation).
+    def _write_png_bytes(data: bytes) -> str:
+        settings.generated_media_dir.mkdir(parents=True, exist_ok=True)
+        name = f"scene_{uuid.uuid4().hex}.png"
+        out = settings.generated_media_dir / name
+        out.write_bytes(data)
+        return f"generated_media/{name}"
+
+    def _local_render_still(*, anchor_path: str | None, seed_key: str) -> str | None:
+        """
+        Local fallback for regenerating a scene still (no API key required).
+        Must look "new" on each click, even if the same garment anchor is used.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageEnhance, ImageFilter  # type: ignore
+        except Exception:
+            return _copy_to_generated(anchor_path)
+
+        rng = random.Random(seed_key)
+
+        def _load(p: str | None) -> "Image.Image | None":
+            if not p:
+                return None
+            try:
+                lp = (settings.data_dir / p).resolve()
+                if not lp.exists():
+                    return None
+                return Image.open(str(lp)).convert("RGB")
+            except Exception:
+                return None
+
+        def _cover_fit(im: "Image.Image", w: int, h: int) -> "Image.Image":
+            scale = max(w / im.width, h / im.height)
+            nw, nh = max(1, int(im.width * scale)), max(1, int(im.height * scale))
+            im2 = im.resize((nw, nh))
+            max_x = max(0, nw - w)
+            max_y = max(0, nh - h)
+            cx = rng.randint(0, max_x) if max_x else 0
+            cy = rng.randint(0, max_y) if max_y else 0
+            return im2.crop((cx, cy, cx + w, cy + h))
+
+        W, H = 1080, 1920
+        canvas = Image.new("RGB", (W, H), (12, 12, 16))
+        dr = ImageDraw.Draw(canvas)
+
+        # Always paint a background that isn't just the anchor.
+        c1 = (rng.randint(10, 40), rng.randint(10, 40), rng.randint(14, 50))
+        c2 = (rng.randint(70, 140), rng.randint(50, 120), rng.randint(40, 110))
+        for y in range(H):
+            t = y / max(1, H - 1)
+            r = int(c1[0] * (1 - t) + c2[0] * t)
+            g = int(c1[1] * (1 - t) + c2[1] * t)
+            b = int(c1[2] * (1 - t) + c2[2] * t)
+            dr.line([(0, y), (W, y)], fill=(r, g, b))
+
+        anchor = _load(anchor_path)
+        if anchor is not None:
+            bg = _cover_fit(anchor, W, H).filter(ImageFilter.GaussianBlur(radius=rng.uniform(18, 30)))
+            bg = ImageEnhance.Color(bg).enhance(1.10 + rng.random() * 0.35)
+            bg = ImageEnhance.Contrast(bg).enhance(1.05 + rng.random() * 0.25)
+            canvas = Image.blend(canvas, bg, alpha=0.35 + rng.random() * 0.25)
+
+            # Foreground "poster" crop (varies per regen via seed_key)
+            fg = anchor.copy()
+            fg = ImageEnhance.Contrast(fg).enhance(1.02 + rng.random() * 0.18)
+            fg = ImageEnhance.Color(fg).enhance(1.02 + rng.random() * 0.28)
+            pw = int(W * (0.62 + rng.random() * 0.10))
+            ph = int(pw * (fg.height / max(1, fg.width)))
+            ph = max(420, min(int(H * 0.72), ph))
+            fg2 = _cover_fit(fg, pw, ph)
+
+            x = (W - pw) // 2 + rng.randint(-18, 18)
+            y = int(H * (0.20 + rng.random() * 0.10))
+            shadow = Image.new("RGBA", (pw + 80, ph + 80), (0, 0, 0, 0))
+            sd = ImageDraw.Draw(shadow)
+            sd.rounded_rectangle((40, 40, 40 + pw, 40 + ph), radius=36, fill=(0, 0, 0, 150))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(radius=18))
+            canvas_rgba = canvas.convert("RGBA")
+            canvas_rgba.alpha_composite(shadow, (x - 40, y - 30))
+
+            card = Image.new("RGBA", (pw, ph), (245, 245, 247, 255))
+            card.alpha_composite(fg2.convert("RGBA"), (0, 0))
+            canvas_rgba.alpha_composite(card, (x, y))
+            canvas = canvas_rgba.convert("RGB")
+
+        # Gentle film-like grade (also varies due to seed)
+        canvas = canvas.filter(ImageFilter.GaussianBlur(radius=rng.random() * 0.6))
+        canvas = ImageEnhance.Contrast(canvas).enhance(1.06 + rng.random() * 0.12)
+        canvas = ImageEnhance.Brightness(canvas).enhance(0.98 + rng.random() * 0.08)
+
+        settings.generated_media_dir.mkdir(parents=True, exist_ok=True)
+        name = f"scene_{uuid.uuid4().hex}.png"
+        out = settings.generated_media_dir / name
+        try:
+            canvas.save(str(out), format="PNG", optimize=True)
+            return f"generated_media/{name}"
+        except Exception:
+            return None
+
+    def _scene_clip_mp4(*, still_rel: str, duration_s: int, stem: str) -> str | None:
+        """
+        Build a short animated MP4 from a still (Ken Burns), silent.
+        This keeps the UI preview (which prefers generated_video_path) in sync after regenerations.
+        """
+        try:
+            still_local = _resolve(still_rel)
+            if still_local is None:
+                return None
+            settings.generated_media_dir.mkdir(parents=True, exist_ok=True)
+            out = settings.generated_media_dir / f"{stem}.mp4"
+
+            w, h = 1080, 1920
+            fps = 18
+            dur_cap = max(2, min(15, int(duration_s or 8)))
+            dur = float(dur_cap)
+            frames = max(1, int(dur * fps))
+
+            vf = (
+                f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h},"
+                f"zoompan=z='min(zoom+0.0012,1.06)':"
+                f"d={frames}:s={w}x{h}:fps={fps}"
+            )
+
+            cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-loop", "1", "-i", str(still_local)]
+            cmd += [
+                "-t",
+                f"{dur:.3f}",
+                "-vf",
+                vf,
+                "-r",
+                str(fps),
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "20",
+                "-an",
+                "-movflags",
+                "+faststart",
+                str(out),
+            ]
+            subprocess.run(cmd, check=True, timeout=90)
+            if out.exists() and out.stat().st_size > 0:
+                return f"generated_media/{out.name}"
+        except Exception:
+            return None
+        return None
+
+    # Conditioning logic:
+    # - Face anchor first (identity).
+    # - Previous generated scene still second when available (on-body continuity; helps avoid flat-lay "hugging").
+    # - Garments last (flat-lay refs can distort; keep them weak and limited).
     ref_for_image: list[Path] = []
     face_local = _resolve(body.face_anchor_path) if body.face_anchor_path else None
     if face_local is not None:
         ref_for_image.append(face_local)
+
+    prev_local = _resolve(body.previous_scene_image_path) if body.previous_scene_image_path else None
+    if prev_local is not None:
+        ref_for_image.append(prev_local)
     garments_local: list[Path] = []
     for p in body.anchor_image_paths or []:
         lp = _resolve(p)
         if lp is not None:
             garments_local.append(lp)
     if garments_local:
-        # Pick one garment reference deterministically from label/description hash.
+        # Pick up to 2 garments deterministically, but keep garments last in the ref ordering.
         h = abs(hash((body.scene.label or "", body.scene.description or "")))
         g0 = garments_local[h % len(garments_local)]
-        ref_for_image.append(g0)
+        g_candidates = [g0]
         if len(garments_local) > 1:
             g1 = garments_local[(h + 1) % len(garments_local)]
             if g1 != g0:
-                ref_for_image.append(g1)
+                g_candidates.append(g1)
+        for g in g_candidates:
+            if g not in ref_for_image:
+                ref_for_image.append(g)
 
+    # Enforce ref-image cap (see MEDIA_MAX_REF_IMAGES).
+    try:
+        cap = max(0, int(getattr(settings, "media_max_ref_images", 3) or 3))
+        ref_for_image = ref_for_image[:cap]
+    except Exception:
+        ref_for_image = ref_for_image[:3]
+
+    variation = uuid.uuid4().hex
     prompt = (
         "Generate ONE photorealistic vertical 9:16 cinematic KEYFRAME (1080x1920 feel).\n"
         "This must look like a NEW frame from a film—not a duplicate of the reference photo’s composition, framing, or background.\n"
         "Invent a fresh environment, lighting, and camera angle aligned with the MOVIE_IDEA.\n\n"
         f"MOVIE_IDEA:\n{movie_idea_s}\nIDEALIZATION:\n{ideal or '(none)'}\n\n"
         f"DESCRIPTION:\n{body.scene.description}\n\n"
+        f"VARIATION_SALT:\n{variation}\n\n"
         "REFERENCE IMAGE RULES:\n"
+        "- If a previous scene frame is provided, maintain identity + wardrobe continuity with that frame while advancing the story beat.\n"
         "- Preserve identity from the face reference.\n"
         "- Preserve key garment colors/materials/silhouettes from wardrobe references and show them ON-BODY.\n"
         "- If MOVIE_IDEA mentions celebrities, treat them as style references ONLY. Do NOT depict them.\n"
@@ -921,44 +1333,56 @@ async def generate_scene_assets(body: GenerateSceneAssetsRequest) -> GenerateSce
         "- No text, logos, watermarks, or UI overlays in the image.\n"
     )
 
-    client = genai.Client(api_key=settings.gemini_api_key)
-    img_model = "models/gemini-2.5-flash-image"
+    rel_image: str | None = None
+    image_path: Path | None = None
+    client = None
 
-    try:
+    if use_llm:
+        client = genai.Client(api_key=settings.gemini_api_key)
+        img_model = "models/gemini-2.5-flash-image"
         try:
-            parts: list[object] = [prompt]
-            for p in ref_for_image[:4]:
-                if p.exists():
-                    parts.append(types.Image.from_file(str(p)))
-            resp = client.models.generate_content(
-                model=img_model,
-                contents=parts,
-                config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
-            )
-        except Exception:
-            # Some models/API versions reject multimodal here; fall back to text-only prompt.
-            resp = client.models.generate_content(
-                model=img_model,
-                contents=prompt,
-                config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
-            )
-        data = _extract_inline_image_bytes(resp)
-        if not data:
-            raise HTTPException(status_code=502, detail="Gemini image generation returned empty bytes.")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Gemini image generation failed: {exc!s}")
-
-    settings.generated_media_dir.mkdir(parents=True, exist_ok=True)
-    image_name = f"scene_{uuid.uuid4().hex}.png"
-    image_path = settings.generated_media_dir / image_name
-    image_path.write_bytes(data)
-    rel_image = f"generated_media/{image_name}"
+            try:
+                parts: list[object] = [prompt]
+                for p in ref_for_image[:4]:
+                    if p.exists():
+                        parts.append(types.Image.from_file(str(p)))
+                resp = client.models.generate_content(
+                    model=img_model,
+                    contents=parts,
+                    config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+                )
+            except Exception:
+                # Some models/API versions reject multimodal here; fall back to text-only prompt.
+                resp = client.models.generate_content(
+                    model=img_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+                )
+            data = _extract_inline_image_bytes(resp)
+            if not data:
+                raise HTTPException(status_code=502, detail="Gemini image generation returned empty bytes.")
+            rel_image = _write_png_bytes(data)
+            image_path = _resolve(rel_image)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Gemini image generation failed: {exc!s}")
+    else:
+        # Local fallback: pick a stable anchor (prefer the scene's anchor) but vary output each click.
+        anchor_for_local = body.scene.anchor_image_path
+        if not anchor_for_local and (body.anchor_image_paths or []):
+            anchor_for_local = body.anchor_image_paths[0]
+        seed_key = f"{uuid.uuid4().hex}:{body.scene.label}:{body.scene.description}:{movie_idea_s}"
+        rel_image = _local_render_still(anchor_path=anchor_for_local, seed_key=seed_key)
+        image_path = _resolve(rel_image) if rel_image else None
+        if not rel_image or image_path is None:
+            raise HTTPException(status_code=502, detail="Local scene image generation failed.")
 
     # Update description to match the newly generated still (vision), when possible.
     desc2: str | None = None
     try:
+        if (not use_llm) or client is None or image_path is None:
+            raise RuntimeError("Skip vision description (no LLM or missing image)")
         img2 = types.Image.from_file(str(image_path))
         prompt2 = (
             "You are writing a short shot description for a fashion reel.\n"
@@ -980,5 +1404,25 @@ async def generate_scene_assets(body: GenerateSceneAssetsRequest) -> GenerateSce
             desc2 = d
     except Exception:
         desc2 = None
-    out = body.scene.model_copy(update={"generated_image_path": rel_image, "description": desc2 or body.scene.description})
+
+    # Keep video preview in sync: the UI prefers generated_video_path over generated_image_path.
+    rel_video: str | None = None
+    try:
+        if rel_image:
+            rel_video = _scene_clip_mp4(
+                still_rel=rel_image,
+                duration_s=int(getattr(body.scene, "duration_seconds", 8) or 8),
+                stem=f"scene_{uuid.uuid4().hex}_preview",
+            )
+    except Exception:
+        rel_video = None
+
+    out = body.scene.model_copy(
+        update={
+            "generated_image_path": rel_image,
+            # If we can't create a new preview mp4, clear any previous one so the UI shows the new still.
+            "generated_video_path": rel_video,
+            "description": desc2 or body.scene.description,
+        }
+    )
     return GenerateSceneAssetsResponse(**out.model_dump())

@@ -4,7 +4,7 @@ import json
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from app.schemas.assistant import AssistantTurnRequest, AssistantTurnResponse
+from app.schemas.assistant import AssistantTurnRequest, AssistantTurnResponse, ChatMessage
 from app.schemas.reel_preview import PreviewReelCopyRequest
 from app.services.store import get_store
 from app.services.assistant_turn import run_assistant_turn
@@ -15,13 +15,14 @@ router = APIRouter(tags=["assistant"])
 
 @router.post("/assistant/turn", response_model=AssistantTurnResponse)
 async def assistant_turn(body: AssistantTurnRequest) -> AssistantTurnResponse:
-    return await run_assistant_turn(body.message, body.context)
+    return await run_assistant_turn(body.message, body.context, history=body.history)
 
 
 @router.post("/assistant/turn-multipart", response_model=AssistantTurnResponse)
 async def assistant_turn_multipart(
     message: str = Form(...),
     context_json: str = Form(default="{}"),
+    history_json: str = Form(default="[]"),
     files: list[UploadFile] = File(default_factory=list),
 ) -> AssistantTurnResponse:
     """
@@ -39,6 +40,15 @@ async def assistant_turn_multipart(
     except Exception:
         ctx_obj = {}
     ctx = ChatContext(**(ctx_obj or {}))
+
+    # Optional chat history (best-effort).
+    history: list[ChatMessage] = []
+    try:
+        hist_obj = json.loads(history_json or "[]")
+        if isinstance(hist_obj, list):
+            history = [ChatMessage(**x) for x in hist_obj if isinstance(x, dict)]
+    except Exception:
+        history = []
 
     settings = get_settings()
     store = get_store()
@@ -83,7 +93,7 @@ async def assistant_turn_multipart(
             except Exception:
                 continue
 
-    res = await run_assistant_turn(message, ctx)
+    res = await run_assistant_turn(message, ctx, history=history)
     # Always return updated context so the frontend stays synced.
     res.updated_context = ctx
     return res

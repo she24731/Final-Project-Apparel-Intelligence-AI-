@@ -1,0 +1,73 @@
+flowchart LR
+  %% =========================================================
+  %% Apparel Intelligence - Slide-Friendly Architecture
+  %% Frontend vs Backend Tooling
+  %% =========================================================
+
+  %% ---- Visual palette tuned for projector contrast ----
+  classDef user fill:#FFF7CC,stroke:#A16207,stroke-width:2.4,color:#3F2A00;
+  classDef fe fill:#DFF7F2,stroke:#0F766E,stroke-width:2.2,color:#083F39;
+  classDef be fill:#E9FCD5,stroke:#3F6212,stroke-width:2.2,color:#253B08;
+  classDef ai fill:#FFE5EC,stroke:#BE123C,stroke-width:2.2,color:#6A1027;
+  classDef data fill:#EFE7FF,stroke:#6D28D9,stroke-width:2.2,color:#35106E;
+  classDef edge fill:#F8FAFC,stroke:#334155,stroke-width:1.8,color:#0F172A;
+
+  %% ---- Main actor ----
+  User[User]
+  Browser[Browser UI]
+  User --> Browser
+  class User,Browser user
+
+  %% ================= FRONTEND =================
+  subgraph FRONTEND[FRONTEND TOOL STACK]
+    direction TB
+    FECore["React + TypeScript SPA<br/>Wardrobe | Style | Buy Analyzer | Content | Chat"]
+    FETools["Vite + TailwindCSS + Fetch API"]
+    FEArtifacts["Build output served in browser"]
+
+    FECore --> FETools --> FEArtifacts
+  end
+  class FECore,FETools,FEArtifacts fe
+
+  %% ================= BACKEND =================
+  subgraph BACKEND[BACKEND TOOL STACK]
+    direction TB
+    BECore["FastAPI + Uvicorn"]
+    BEStruct["Routers + Pydantic Schemas + Service Layer"]
+    BELogic["Recommendation + Purchase + Assistant + Media endpoints"]
+
+    BECore --> BEStruct --> BELogic
+  end
+  class BECore,BEStruct,BELogic be
+
+  %% ================= AI/RETRIEVAL =================
+  subgraph AIRETRIEVAL[AI AND RETRIEVAL TOOLS]
+    direction TB
+    AIAgents["PydanticAI Agents"]
+    AIModel["Google Gemini via google-genai"]
+    AIRAG["Local Embeddings + Vector Similarity (NumPy)"]
+
+    AIAgents --> AIModel
+    AIAgents --> AIRAG
+  end
+  class AIAgents,AIModel ai
+  class AIRAG data
+
+  %% ================= MEDIA + STORAGE =================
+  subgraph MEDIASTORE[MEDIA AND DATA LAYER]
+    direction TB
+    MediaTools["MoviePy + Pillow"]
+    DataFiles["data/uploads + data/generated_media"]
+
+    MediaTools --> DataFiles
+  end
+  class MediaTools ai
+  class DataFiles data
+
+  %% ---- Cross-layer flow (big-picture only) ----
+  Browser --> FECore
+  FEArtifacts -->|HTTP JSON + multipart| BECore
+  BELogic --> AIAgents
+  BELogic --> AIRAG
+  BELogic --> MediaTools
+  BECore -->|serve static assets| DataFiles

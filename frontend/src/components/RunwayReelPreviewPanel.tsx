@@ -165,13 +165,39 @@ export function RunwayReelPreviewPanel({
       setCopyErr('Please enter a “Movie idea” first (one sentence: concept + vibe).');
       return;
     }
-    if (!faceAnchorPath) {
-      setCopyErr("Please upload a face anchor selfie first (recommended for best video continuity).");
-      return;
-    }
     if (!wardrobeAnchors.length) {
       setCopyErr("Pick an outfit first (Style → Recommend outfit), so we have garment anchors.");
       return;
+    }
+    // Critical fix:
+    // Scene 1 must NEVER use the raw face anchor as the rendered still/video seed.
+    // If the user clicks "Generate video" before generating scenes, we first generate
+    // cinematic scene stills (using face+garment anchors as references) and only then render video.
+    if (scenes.length === 0 || scenes.some((s) => !s.generated_image_path && !s.generated_video_path)) {
+      try {
+        setCopyBusy(true);
+        setCopyErr(null);
+        const res = await onGenerateScenes({
+          scene_prompt: scenePrompt.trim(),
+          anchor_image_paths: wardrobeAnchors,
+          face_anchor_path: faceAnchorPath,
+          duration_seconds: 30,
+          face_anchor_present: !!faceAnchorPath,
+        });
+        setLogline(res.description);
+        setScenes(res.scenes);
+        persistWrite({
+          scenePrompt: scenePrompt.trim(),
+          logline: res.description,
+          scenes: res.scenes,
+          musicPath,
+        });
+      } catch (e) {
+        setCopyErr(e instanceof ApiError ? e.body : "Couldn’t generate scene assets before rendering.");
+        return;
+      } finally {
+        setCopyBusy(false);
+      }
     }
     const scenePayload: ReelVideoScenePayload[] | undefined =
       scenes.length > 0
@@ -196,7 +222,7 @@ export function RunwayReelPreviewPanel({
   };
 
   const providerHint =
-    "Each anchor (selfie + garment shots) gets its own AI shot description. Video render stitches one clip per scene when MEDIA_PROVIDER=gemini_video and GEMINI_API_KEY are set (billable).";
+    "Generate scenes creates cinematic stills for each beat (Scene 1 is an establishing shot; selfie is used as an identity reference only). Generate video then animates/stitches those beats when MEDIA_PROVIDER=gemini_video and GEMINI_API_KEY are set (billable).";
 
   return (
     <Card
@@ -373,13 +399,21 @@ export function RunwayReelPreviewPanel({
                 className="rounded-2xl border border-accent/20 bg-[#E8E8E8]/30 p-4"
               >
                 <div className="flex flex-wrap items-start gap-3">
-                  {s.generated_video_path || s.generated_image_path || s.anchor_image_path ? (
+                  {(() => {
+                    // Prefer the newly generated scene still (render_image_path / generated_image_path).
+                    // Only fall back to the anchor image if this scene hasn't been generated yet.
+                    const renderPath =
+                      (s as unknown as { render_image_path?: string | null }).render_image_path ?? s.generated_image_path ?? null;
+                    const fallbackAnchor = s.anchor_image_path ?? null;
+                    const displayPath = s.generated_video_path ? s.generated_video_path : renderPath ?? fallbackAnchor;
+                    if (!displayPath) return null;
+                    return (
                     <button
                       type="button"
                       className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-line bg-[#F5F5F5] text-left ring-0 transition hover:ring-2 hover:ring-accent/35"
                       onClick={() =>
                         openLightbox(
-                          mediaUrl(s.generated_video_path || s.generated_image_path || s.anchor_image_path || ""),
+                          mediaUrl(displayPath),
                           s.label || `Scene ${idx + 1}`,
                         )
                       }
@@ -397,14 +431,15 @@ export function RunwayReelPreviewPanel({
                         />
                       ) : (
                         <img
-                          src={mediaUrl(s.generated_image_path || s.anchor_image_path || "")}
+                          src={mediaUrl(renderPath ?? fallbackAnchor ?? "")}
                           alt=""
                           className="h-full w-full object-cover"
                           loading="lazy"
                         />
                       )}
                     </button>
-                  ) : (
+                    );
+                  })() ?? (
                     <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl border border-dashed border-line text-[10px] text-black/40">
                       No still
                     </div>
@@ -431,6 +466,12 @@ export function RunwayReelPreviewPanel({
                                 face_anchor_path: faceAnchorPath,
                                 duration_seconds: 30,
                                 face_anchor_present: !!faceAnchorPath,
+                                previous_scene_image_path:
+                                  idx > 0
+                                    ? ((scenes[idx - 1] as unknown as { render_image_path?: string | null }).render_image_path ??
+                                      scenes[idx - 1]?.generated_image_path ??
+                                      null)
+                                    : null,
                                 scene: s,
                               });
                               const next = [...scenes];

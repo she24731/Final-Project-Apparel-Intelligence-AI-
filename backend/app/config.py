@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     gemini_tts_voice: str = Field(default="Kore", validation_alias="GEMINI_TTS_VOICE")
     runway_api_key: str | None = Field(default=None, validation_alias="RUNWAY_API_KEY")
     media_provider: str = Field(default="mock", validation_alias="MEDIA_PROVIDER")
+    # Max reference images to attach to Gemini image generation calls.
+    # This is a pragmatic knob because some models / SDK versions have implicit limits and because
+    # too many flat-lay garment references can cause "composition hugging" (output looks like the garment photo).
+    media_max_ref_images: int = Field(default=3, validation_alias="MEDIA_MAX_REF_IMAGES")
     backend_host: str = Field(default="127.0.0.1", validation_alias="BACKEND_HOST")
     backend_port: int = Field(default=8000, validation_alias="BACKEND_PORT")
     cors_origins: str = Field(

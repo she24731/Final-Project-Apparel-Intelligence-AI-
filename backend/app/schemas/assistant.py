@@ -8,6 +8,13 @@ from app.schemas.media import GenerateScriptResponse, GenerateVideoResponse
 from app.schemas.recommend import RecommendOutfitResponse
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    ts: str | None = None
+    id: str | None = None
+
+
 class ChatContext(BaseModel):
     occasion: str = ""
     weather: str = ""
@@ -21,6 +28,7 @@ class ChatContext(BaseModel):
 class AssistantTurnRequest(BaseModel):
     message: str
     context: ChatContext = Field(default_factory=ChatContext)
+    history: list[ChatMessage] = Field(default_factory=list, description="Recent chat turns (optional).")
 
 
 class AssistantTurnResponse(BaseModel):

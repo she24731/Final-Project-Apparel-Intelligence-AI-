@@ -27,7 +27,12 @@ export function AgentChatPanel({ recommendation }: { recommendation: RecommendOu
           <p className="text-xs text-black/45">No messages yet.</p>
         ) : (
           turns.map((t) => (
-            <div key={t.id} className={`rounded-xl border px-3 py-2 text-sm ${t.role === "user" ? "border-line bg-[#E8E8E8]" : "border-accent/25 bg-[#F5F5F5]`}>
+            <div
+              key={t.id}
+              className={`rounded-xl border px-3 py-2 text-sm ${
+                t.role === "user" ? "border-line bg-[#E8E8E8]" : "border-accent/25 bg-[#F5F5F5]"
+              }`}
+            >
               <p className="text-[10px] font-semibold uppercase tracking-wide text-black/40">{t.role}</p>
               <p className="mt-1 text-black/85">{t.content}</p>
             </div>

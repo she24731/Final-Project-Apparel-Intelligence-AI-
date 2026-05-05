@@ -14,10 +14,11 @@ from app.agents.orchestrator import (
     recommend_outfit_with_optional_agent,
 )
 from app.config import get_settings
-from app.schemas.assistant import AssistantTurnResponse, ChatContext
+from app.schemas.assistant import AssistantTurnResponse, ChatContext, ChatMessage
 from app.schemas.media import GenerateVideoRequest, ReelVideoScenePayload
 from app.schemas.reel_preview import PreviewReelCopyRequest
 from app.schemas.wardrobe import GarmentRecord
+from app.services.style_rules import retrieve_style_rules
 from app.services.store import get_store
 from app.services.video_generation import run_generate_video
 
@@ -42,7 +43,70 @@ def _detect_platform(msg: str) -> Literal["linkedin", "instagram", "tiktok"]:
     return "instagram"
 
 
+def _format_history(history: list[ChatMessage], max_turns: int = 12) -> str:
+    if not history:
+        return ""
+    trimmed = history[-max_turns:]
+    lines: list[str] = []
+    for m in trimmed:
+        role = "User" if m.role == "user" else "Assistant"
+        content = (m.content or "").strip()
+        if not content:
+            continue
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
+def _deterministic_chat_advice(message: str, context: ChatContext, wardrobe: list[GarmentRecord]) -> str:
+    """
+    Non-LLM fallback: provide helpful, natural chat answers using local KB retrieval + wardrobe summary.
+    """
+    occ = (context.occasion or "").strip() or "work_presentation"
+    wea = (context.weather or "").strip() or "mild_clear"
+    vibe = (context.vibe or "").strip() or "quiet_luxury"
+    rules = retrieve_style_rules((occ, wea, vibe), top_n=2)
+
+    wardrobe_summary = ", ".join(f"{g.color} {g.category}" for g in wardrobe[:8] if g.color or g.category)
+    if not wardrobe_summary:
+        wardrobe_summary = "no wardrobe items uploaded yet"
+
+    bullets: list[str] = []
+    if rules:
+        for r in rules:
+            bullets.append(f"- {r.text}")
+
+    # Heuristic: detect the user's likely concern and respond accordingly.
+    low = message.lower()
+    if any(k in low for k in ("too formal", "too dressy", "overdressed")):
+        extra = "If it feels overdressed, keep the same silhouette but swap one anchor (usually shoes or outerwear) to a cleaner casual option."
+    elif any(k in low for k in ("too casual", "underdressed", "not formal enough")):
+        extra = "If it reads too casual, upgrade one anchor (shoes/outerwear) and tighten the palette to 2–3 hues."
+    elif any(k in low for k in ("color", "match", "clash", "palette")):
+        extra = "For color harmony, keep 2–3 main hues and make the accent small (belt/bag/shoe) so it looks intentional."
+    elif any(k in low for k in ("rain", "wet", "snow", "weather")):
+        extra = "For weather, pick a water-resistant outer layer, darker bottoms, and footwear with traction—then add a mid-layer for indoor swings."
+    else:
+        extra = "Tell me what feels “off” (fit, color, formality, weather, or vibe) and I’ll suggest the smallest swap that fixes it."
+
+    base = (
+        f"Here’s my take for {occ.replace('_', ' ')} in {wea.replace('_', ' ')} with a {vibe.replace('_', ' ')} vibe.\n\n"
+        f"From your wardrobe: {wardrobe_summary}.\n\n"
+    )
+    if bullets:
+        base += "Style principles I’m using:\n" + "\n".join(bullets) + "\n\n"
+    base += extra
+    return base
+
 async def _do_recommend(context: ChatContext, wardrobe: list[GarmentRecord], actions: list[str]) -> AssistantTurnResponse:
+    if not wardrobe:
+        return AssistantTurnResponse(
+            reply=(
+                "I can recommend an outfit, but I don’t see any wardrobe items yet.\n\n"
+                "Please upload a few photos first (top, bottom, shoes, outerwear). "
+                "You can drag & drop into chat or use the Wardrobe page."
+            ),
+            actions=actions,
+        )
     rec = await recommend_outfit_with_optional_agent(
         occasion=context.occasion.strip() or "work_presentation",
         weather=context.weather.strip() or "mild_clear",
@@ -256,6 +320,16 @@ async def _dispatch_concierge(
 
 
 async def _gemini_concierge_turn(message: str, context: ChatContext, wardrobe: list[GarmentRecord]) -> AssistantTurnResponse | None:
+    return await _gemini_concierge_turn_with_history(message, context, wardrobe, history=[])
+
+
+async def _gemini_concierge_turn_with_history(
+    message: str,
+    context: ChatContext,
+    wardrobe: list[GarmentRecord],
+    *,
+    history: list[ChatMessage],
+) -> AssistantTurnResponse | None:
     settings = get_settings()
     if not settings.has_live_llm:
         return None
@@ -270,11 +344,13 @@ async def _gemini_concierge_turn(message: str, context: ChatContext, wardrobe: l
         wardrobe_json=wardrobe_json,
     )
     agent = concierge_agent()
+    hist = _format_history(history)
     prompt = (
         f"[CONTEXT]\noccasion={context.occasion!r}\nweather={context.weather!r}\nvibe={context.vibe!r}\n"
         f"preference={context.preference!r}\noutfit_summary={context.outfit_summary!r}\n"
         f"face_anchor_path={context.face_anchor_path!r}\n\n"
-        f"[WARDROBE_JSON]\n{wardrobe_json}\n\n[USER_MESSAGE]\n{message}"
+        + (f"[CHAT_HISTORY]\n{hist}\n\n" if hist else "")
+        + f"[WARDROBE_JSON]\n{wardrobe_json}\n\n[USER_MESSAGE]\n{message}"
     )
     result = await agent.run(prompt, deps=deps)
     return await _dispatch_concierge(result.output, message, context, wardrobe)
@@ -335,20 +411,14 @@ async def _keyword_assistant_turn(message: str, context: ChatContext, wardrobe: 
     ):
         return await _do_render_video(context, wardrobe, actions)
 
+    # Otherwise: behave like a normal chat assistant (deterministic fallback).
     return AssistantTurnResponse(
-        reply=(
-            "Try asking:\n"
-            "- “Recommend an outfit for work”\n"
-            "- “Write an Instagram script for this outfit”\n"
-            "- “Preview reel copy”\n"
-            "- “Generate video”\n"
-            "- “Analyze purchase for <garment-id>”"
-        ),
+        reply=_deterministic_chat_advice(message, context, wardrobe),
         actions=actions,
     )
 
 
-async def run_assistant_turn(message: str, context: ChatContext) -> AssistantTurnResponse:
+async def run_assistant_turn(message: str, context: ChatContext, *, history: list[ChatMessage] | None = None) -> AssistantTurnResponse:
     msg = message.strip()
     if not msg:
         return AssistantTurnResponse(
@@ -358,10 +428,11 @@ async def run_assistant_turn(message: str, context: ChatContext) -> AssistantTur
 
     wardrobe = _wardrobe_for_context(context)
     settings = get_settings()
+    history = history or []
 
     if settings.has_live_llm:
         try:
-            gem = await _gemini_concierge_turn(msg, context, wardrobe)
+            gem = await _gemini_concierge_turn_with_history(msg, context, wardrobe, history=history)
             if gem is not None:
                 return gem
         except Exception:

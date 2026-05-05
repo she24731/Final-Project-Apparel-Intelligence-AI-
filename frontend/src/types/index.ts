@@ -88,6 +88,11 @@ export interface PreviewReelCopyRequestBody {
   face_anchor_path: string | null;
   duration_seconds: number;
   face_anchor_present: boolean;
+  /**
+   * Optional: pass the previously GENERATED scene still to enforce continuity for scenes 2+.
+   * Used by `/generate-scene-assets`.
+   */
+  previous_scene_image_path?: string | null;
 }
 
 export interface PreviewReelCopyResponse {

@@ -621,6 +621,33 @@ def _local_animated_reel_mp4(*, req: GenerateVideoRequest, job_id: str) -> str |
 
 async def run_generate_video(body: GenerateVideoRequest) -> GenerateVideoResponse:
     settings = get_settings()
+
+    # Direct-to-video pipeline support:
+    # If the caller already has per-scene generated MP4s (e.g., produced by /generate-scenes),
+    # stitch them into a single movie without re-calling Veo.
+    if body.scenes and all(((getattr(s, "generated_video_path", None) or "")).startswith("generated_media/") for s in body.scenes):
+        import uuid
+
+        job_id = str(uuid.uuid4())
+        out_dir = settings.generated_media_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{job_id}.mp4"
+        clip_paths: list[Path] = []
+        for seg in body.scenes:
+            lp = _resolve_local_image(settings, getattr(seg, "generated_video_path", None) or "")
+            if lp is not None:
+                clip_paths.append(lp)
+        if clip_paths and _concat_mp4s(clip_paths=clip_paths, out_path=out_path):
+            return GenerateVideoResponse(
+                status="completed",
+                job_id=job_id,
+                preview_message=f"Stitched {len(clip_paths)} Veo clips into a single MP4.",
+                video_url=f"/generated_media/{out_path.name}",
+                provider="stitch_only",
+                description="Direct-to-video stitched reel",
+                video_prompt=body.scene_prompt,
+            )
+
     provider = pick_provider(provider_name=settings.media_provider, has_runway_key=bool(settings.runway_api_key))
     if body.scenes and len(body.scenes) > 0:
         stitched = " | ".join(s.description for s in body.scenes)

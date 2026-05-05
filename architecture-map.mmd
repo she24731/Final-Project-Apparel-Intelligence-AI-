@@ -1,56 +1,87 @@
 flowchart LR
-  %% ===== Styles =====
-  classDef fe fill:#E8F1FF,stroke:#2B6CB0,stroke-width:1.5,color:#0B2545;
-  classDef be fill:#E9FBF1,stroke:#2F855A,stroke-width:1.5,color:#0B2E1A;
-  classDef rag fill:#F3E8FF,stroke:#6B46C1,stroke-width:1.5,color:#2D1B69;
-  classDef ai fill:#FFF3E0,stroke:#C05621,stroke-width:1.5,color:#4A1F0B;
-  classDef store fill:#F7FAFC,stroke:#4A5568,stroke-width:1.2,color:#1A202C;
+  %% =========================================================
+  %% Apparel Intelligence - Tool-Centric Architecture Map
+  %% Categorized into Frontend and Backend
+  %% =========================================================
 
-  %% ===== Frontend =====
-  U[User / Browser]:::fe
-  FE[React 18 + TypeScript<br/>Vite + TailwindCSS]:::fe
-  Pages[Pages<br/>Wardrobe, Style, Buy Analyzer, Content<br/>+ Chat widget]:::fe
-  ApiClient[API Client - fetch<br/>JSON + multipart]:::fe
+  %% ---- Visual theme ----
+  classDef user fill:#FFF8E1,stroke:#B7791F,stroke-width:1.8,color:#4A2C00;
+  classDef feCore fill:#E6FFFA,stroke:#0F766E,stroke-width:1.8,color:#083E3A;
+  classDef feTool fill:#DBEAFE,stroke:#1D4ED8,stroke-width:1.6,color:#0B2E77;
+  classDef beCore fill:#ECFCCB,stroke:#4D7C0F,stroke-width:1.8,color:#2E4A0B;
+  classDef beTool fill:#F0FDF4,stroke:#15803D,stroke-width:1.6,color:#14532D;
+  classDef ai fill:#FFF1F2,stroke:#BE123C,stroke-width:1.8,color:#650B1E;
+  classDef data fill:#F5F3FF,stroke:#6D28D9,stroke-width:1.8,color:#3B0F7A;
 
-  U --> FE --> Pages --> ApiClient
+  %% ---- Entry ----
+  User[User / Browser]:::user
 
-  %% ===== Backend =====
-  API[FastAPI - Python 3.11<br/>Uvicorn + CORS<br/>Static: /uploads, /generated_media]:::be
-  Routers[Routers / Endpoints<br/>GET /health<br/>POST /ingest-garment multipart<br/>POST /recommend-outfit<br/>POST /analyze-purchase<br/>POST /generate-script<br/>POST /generate-video<br/>POST /assistant]:::be
-  Schemas[Pydantic v2<br/>+ pydantic-settings<br/>Typed req/resp + env config]:::be
-  Services[Services<br/>Deterministic fallbacks - demo reliability]:::be
+  %% ================= FRONTEND =================
+  subgraph FRONTEND[Frontend Experience Layer]
+    direction TB
+    FEApp[App UI<br/>Wardrobe | Style | Buy Analyzer | Content | Chat]:::feCore
+    React[React 18]:::feTool
+    TS[TypeScript]:::feTool
+    Vite[Vite Dev Server + Build]:::feTool
+    Tailwind[TailwindCSS]:::feTool
+    Fetch[API Client - fetch<br/>JSON + multipart/form-data]:::feTool
 
-  ApiClient -->|HTTP| API --> Routers --> Schemas --> Services
+    FEApp --> React
+    FEApp --> TS
+    FEApp --> Tailwind
+    FEApp --> Fetch
+    React --> Vite
+    TS --> Vite
+  end
 
-  %% ===== Retrieval (RAG-style) =====
-  RAG[RAG-style Local Retrieval - no web search]:::rag
-  Embed[Deterministic Embeddings pipeline]:::rag
-  VStore[Local Vector Store - in-process<br/>NumPy cosine similarity<br/>demo scale & deterministic]:::rag
-  Corpora[Corpora<br/>Wardrobe embeddings + Style KB snippets]:::rag
+  %% ================= BACKEND =================
+  subgraph BACKEND[Backend Intelligence Layer]
+    direction TB
+    API[FastAPI app.main<br/>CORS + static serving]:::beCore
+    Uvicorn[Uvicorn ASGI runtime]:::beTool
+    Routers[Routers<br/>health | wardrobe | recommend | purchase | social | media | assistant]:::beTool
+    Schemas[Pydantic v2 schemas<br/>pydantic-settings config]:::beTool
+    Services[Service layer<br/>recommendation + purchase logic + content generation]:::beTool
+    Py[Python 3.11]:::beTool
 
-  Services -->|retrieve top-k| RAG
-  RAG --> Embed --> VStore --> Corpora
-  Routers -->|/ingest-garment| Corpora
+    API --> Routers --> Schemas --> Services
+    API --> Uvicorn
+    Services --> Py
+  end
 
-  %% ===== Agents + Providers =====
-  Agents[PydanticAI agents - typed outputs<br/>optional orchestration]:::ai
-  Gemini[Google Gemini API - google-genai SDK<br/>LLM reasoning + TTS + Veo video]:::ai
-  Runway[Runway - stub adapter<br/>future integration path]:::ai
-  MediaTools[MoviePy + Pillow<br/>local post-processing]:::ai
+  %% ================= AI + RETRIEVAL =================
+  subgraph AISTACK[AI and Retrieval Tooling]
+    direction TB
+    Agents[PydanticAI agents<br/>typed orchestration]:::ai
+    Gemini[Google Gemini via google-genai<br/>reasoning + script + media prompting]:::ai
+    Retrieval[Local retrieval pipeline]:::data
+    Emb[Embeddings service]:::data
+    VStore[Local vector store<br/>NumPy cosine similarity]:::data
+    StyleKB[Style KB + wardrobe corpus]:::data
+    MediaTools[MoviePy + Pillow<br/>video and image post-processing]:::ai
 
+    Agents --> Gemini
+    Retrieval --> Emb --> VStore --> StyleKB
+    Gemini --> MediaTools
+  end
+
+  %% ================= STORAGE =================
+  subgraph STORAGE[Local Data and Artifacts]
+    direction TB
+    DataRoot[data/]:::data
+    Uploads[data/uploads]:::data
+    GenMedia[data/generated_media]:::data
+
+    DataRoot --- Uploads
+    DataRoot --- GenMedia
+  end
+
+  %% ---- Cross-layer flow ----
+  User --> FEApp
+  Fetch -->|HTTP| API
   Services --> Agents
-  Agents --> Gemini
-  Services -->|provider abstraction| Runway
-  Gemini -->|video clips| MediaTools
-
-  %% ===== Local storage =====
-  Data[Local data ./data]:::store
-  Uploads[uploads - garment images]:::store
-  GenMedia[generated_media - MP4]:::store
-
-  API -->|serve| Uploads
-  API -->|serve| GenMedia
-  Data --- Uploads
-  Data --- GenMedia
-  MediaTools -->|write MP4| GenMedia
-  FE <-->|URLs + JSON| API
+  Services --> Retrieval
+  Routers -->|ingest garment| Uploads
+  API -->|serves files| Uploads
+  API -->|serves files| GenMedia
+  MediaTools -->|writes MP4/preview| GenMedia

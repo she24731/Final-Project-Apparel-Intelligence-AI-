@@ -355,12 +355,23 @@ export default function App() {
           face_anchor_path: faceAnchorPath,
         }}
         onApplyResult={(res: AssistantTurnResponse) => {
+          const acts = (res.actions ?? []).map((a) => a.toLowerCase());
           if (res.recommendation) setRecommendation(res.recommendation);
           if (res.script) setScript(res.script);
           if (res.video) setVideo(res.video);
           if (res.updated_context?.face_anchor_path) setFaceAnchorPath(res.updated_context.face_anchor_path);
           // If the assistant ingested wardrobe items via chat attachments, refresh from server.
-          if (res.updated_context?.wardrobe_item_ids?.length) void refreshServerWardrobe();
+          if (res.updated_context?.wardrobe_item_ids?.length) {
+            void refreshServerWardrobe();
+            // Show the result immediately so the user sees the uploads without navigating.
+            setRoute("wardrobe");
+          }
+
+          // If chat produced core outputs, jump the user to the right page automatically.
+          if (acts.includes("recommend_outfit") || res.recommendation) setRoute("style");
+          if (acts.includes("generate_script") || acts.includes("preview_reel_copy") || acts.includes("generate_video") || res.script || res.video) {
+            setRoute("content");
+          }
         }}
       />
     </ImageLightboxProvider>
