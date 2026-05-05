@@ -60,6 +60,71 @@ The UI is intentionally guided to reduce cognitive load:
 4. **Content**: generate a script/caption + runway preview (placeholder if no provider)
 5. **Chat**: use the bottom-right chat button anytime for quick tweaks and alternatives
 
+### Simulation (Gemini Reel Lab) — 3-step workflow
+
+This is the demo path for multi-scene media generation (vertical reel preview).
+
+**Step 1: Wardrobe → Style**
+
+- Upload garment images in **Wardrobe**
+- Go to **Style** → click **Recommend outfit**
+  - This produces the recommended outfit **garment anchors** (stored as `uploads/...`)
+
+**Step 2: Content → Simulation → Generate scenes**
+
+1. Upload a **Face anchor** (selfie). This is the identity reference.
+2. Enter a one-sentence **Movie idea** (concept + vibe).
+3. Click **Generate scenes**.
+
+What happens under the hood:
+
+- The backend analyzes anchors and builds a **premise (structured JSON)** for the run:
+  - `premise.json`, `story_state.json`, and `anchors_analysis.json` are written under `backend/data/reel_runs/<job_id>/`
+- The reel is generated as a **fixed 4-scene** storyboard for predictable grading/demo flow.
+- For each scene, the backend produces a per-scene **description** (JSON beat) and generates a new still image:
+  - Scene outputs are saved under `backend/data/generated_media/`
+  - The UI shows either the still (`generated_image_path`) or a short preview MP4 (`generated_video_path`)
+
+**Step 3: Generate video**
+
+- Click **Generate video** to render/mux the scene sequence into a single MP4 (provider-dependent).
+
+### Scene conditioning logic (identity + outfit + continuity)
+
+Each scene is generated with:
+
+- **Face anchor** (identity; always highest priority)
+- **Garment anchors** (outfit constraints from the recommended outfit)
+- **Premise JSON** (shared story spine across all scenes)
+- **Description JSON** (per-scene beat; updated as scenes are generated)
+- **Prior scene context** (for scenes 2–4, continuity is enforced using prior scene description and, when possible, the prior scene still)
+
+### Reference image limits (Gemini constraint)
+
+Gemini image generation can have implicit limits on how many **reference images** can be attached, and flat-lay garment photos can cause “composition hugging” (outputs that resemble catalog shots or appear warped when constraints conflict).
+
+You can control the max attached reference images with:
+
+```env
+MEDIA_MAX_REF_IMAGES=3
+```
+
+Priority rules when reference images are limited:
+
+- If limit = 1: **Face anchor only**
+- If limit = 2: **Face anchor + prior generated frame** (scene 2+) or **Face + 1 garment** (scene 1)
+- If limit = 3: **Face anchor + prior generated frame + 1 garment** (scene 2+) or **Face + 2 garments** (scene 1)
+
+If you need **Face + 2 garments + prior generated frame** as attached references for scenes 2–4, set:
+
+```env
+MEDIA_MAX_REF_IMAGES=4
+```
+
+Notes:
+- The face anchor is always prioritized first for identity stability.
+- For scenes 2–4, using the **previous generated frame** is often more stable than attaching multiple flat-lay garment references.
+
 ### Suggested “2-minute demo” (for graders)
 
 1) Go to **Wardrobe** and upload **3–6 items** (ideally: top, bottom, shoes, outerwear).  
@@ -112,6 +177,7 @@ BACKEND_HOST=127.0.0.1
 BACKEND_PORT=8000
 FRONTEND_API_BASE_URL=http://127.0.0.1:8000
 MEDIA_PROVIDER=mock
+MEDIA_MAX_REF_IMAGES=3
 ```
 
 Notes:
