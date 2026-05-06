@@ -28,6 +28,17 @@ from app.utils.image_upload import looks_like_image_upload
 router = APIRouter(tags=["media"])
 
 
+def _genai_image_from_local_path(path: Path) -> types.Image:
+    """
+    Build a google-genai Image from disk.
+
+    The SDK defines `Image.from_file(*, location=..., mime_type=...)`. Positional calls raise
+    TypeError; those errors were previously swallowed by broad try/except blocks, breaking every
+    multimodal image request (face / wardrobe references).
+    """
+    return types.Image.from_file(location=str(path.resolve()))
+
+
 def _copy_to_generated(anchor_path: str | None) -> str | None:
     """
     Last-resort still: copy the anchor bytes into generated_media so the UI always has a file
@@ -106,16 +117,25 @@ def _extract_inline_image_bytes(resp: object) -> bytes | None:
         content = getattr(cand, "content", None)
         parts = getattr(content, "parts", None) if content is not None else None
         for part in parts or []:
+            if getattr(part, "thought", None) is True:
+                continue
             inline = getattr(part, "inline_data", None)
             data = getattr(inline, "data", None) if inline is not None else None
-            if not data:
-                continue
-            if isinstance(data, str):
-                try:
-                    return base64.b64decode(data)
-                except Exception:
-                    return None
-            return data
+            if data:
+                if isinstance(data, str):
+                    try:
+                        return base64.b64decode(data)
+                    except Exception:
+                        continue
+                return data
+            try:
+                gimg = part.as_image()
+                if gimg is not None:
+                    ib = getattr(gimg, "image_bytes", None)
+                    if ib:
+                        return ib
+            except Exception:
+                pass
     return None
 
 
@@ -297,27 +317,20 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
 
         def _run() -> bytes | None:
             client = genai.Client(api_key=settings.gemini_api_key)  # type: ignore[arg-type]
-            # 1) Prefer Imagen text-to-image (guaranteed "from scratch" canvas).
-            try:
-                img_resp = client.models.generate_images(
-                    model="imagen-3.0-generate-002",
-                    prompt=prompt,
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
-                        aspect_ratio="9:16",
-                    ),
-                )
-                # Response shape varies slightly; try common fields.
-                imgs = getattr(img_resp, "generated_images", None) or getattr(img_resp, "images", None) or []
-                for im in imgs:
-                    b = getattr(im, "image_bytes", None) or getattr(im, "bytes", None) or None
-                    if b:
-                        return b
-            except Exception:
-                pass
+            # IMPORTANT:
+            # If we have reference images (especially the face anchor), we must try Gemini multimodal FIRST.
+            # Imagen text-to-image ignores references entirely, which causes the UI to look like it's
+            # "using the garment anchor" (because the system later falls back to local anchor-based stills
+            # or the model drifts). So:
+            # - force_text_to_image=True: text-only (no refs)
+            # - otherwise, if refs exist: try Gemini multimodal first, then Imagen as a last resort.
 
-            # 2) Fallback: Gemini image model. If force_text_to_image=True, do text-only.
+            # 1) Gemini image model candidates (prefer current Nano Banana / image-preview IDs).
             model_candidates = [
+                "gemini-3.1-flash-image-preview",
+                "models/gemini-3.1-flash-image-preview",
+                "gemini-3-pro-image-preview",
+                "models/gemini-3-pro-image-preview",
                 "gemini-2.5-flash-image",
                 "models/gemini-2.5-flash-image",
                 "gemini-2.0-flash-exp-image-generation",
@@ -330,38 +343,83 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
                 )
             except Exception:
                 cfg = types.GenerateContentConfig(response_modalities=["IMAGE"])
+            try:
+                cfg_mixed = types.GenerateContentConfig(
+                    response_modalities=["TEXT", "IMAGE"],
+                    image_config=types.ImageConfig(aspect_ratio="9:16"),
+                )
+            except Exception:
+                cfg_mixed = types.GenerateContentConfig(response_modalities=["TEXT", "IMAGE"])
+
+            # Prefer no explicit config first (matches AI Studio samples); then IMAGE-only; then TEXT+IMAGE.
+            cfg_attempts: list[types.GenerateContentConfig | None] = [None, cfg, cfg_mixed]
 
             if force_text_to_image:
                 for model in model_candidates:
+                    for try_cfg in cfg_attempts:
+                        try:
+                            if try_cfg is None:
+                                resp = client.models.generate_content(model=model, contents=prompt)
+                            else:
+                                resp = client.models.generate_content(model=model, contents=prompt, config=try_cfg)
+                            data = _extract_inline_image_bytes(resp)
+                            if data:
+                                return data
+                        except Exception:
+                            pass
+                return None
+
+            # 2) Multimodal Gemini first (refs applied).
+            if ref_paths:
+                parts_with_ref: list[object] = [prompt]
+                for p in (ref_paths or [])[:4]:
+                    if p.exists():
+                        parts_with_ref.append(_genai_image_from_local_path(p))
+                for model in model_candidates:
+                    for try_cfg in cfg_attempts:
+                        try:
+                            if try_cfg is None:
+                                resp = client.models.generate_content(model=model, contents=parts_with_ref)
+                            else:
+                                resp = client.models.generate_content(model=model, contents=parts_with_ref, config=try_cfg)
+                            data = _extract_inline_image_bytes(resp)
+                            if data:
+                                return data
+                        except Exception:
+                            pass
+
+            # 3) Text-only Gemini fallback.
+            for model in model_candidates:
+                for try_cfg in cfg_attempts:
                     try:
-                        resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
+                        if try_cfg is None:
+                            resp = client.models.generate_content(model=model, contents=prompt)
+                        else:
+                            resp = client.models.generate_content(model=model, contents=prompt, config=try_cfg)
                         data = _extract_inline_image_bytes(resp)
                         if data:
                             return data
                     except Exception:
                         pass
-                return None
 
-            # Non-scene1: allow references as guidance (may still drift; Veo will enforce later).
-            parts_with_ref: list[object] = [prompt]
-            for p in (ref_paths or [])[:4]:
-                if p.exists():
-                    parts_with_ref.append(types.Image.from_file(str(p)))
-            for model in model_candidates:
-                try:
-                    resp = client.models.generate_content(model=model, contents=parts_with_ref, config=cfg)
-                    data = _extract_inline_image_bytes(resp)
-                    if data:
-                        return data
-                except Exception:
-                    pass
-                try:
-                    resp = client.models.generate_content(model=model, contents=prompt, config=cfg)
-                    data = _extract_inline_image_bytes(resp)
-                    if data:
-                        return data
-                except Exception:
-                    pass
+            # 4) Last resort: Imagen text-to-image (no refs; may lose identity/outfit).
+            try:
+                img_resp = client.models.generate_images(
+                    model="imagen-3.0-generate-002",
+                    prompt=prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        aspect_ratio="9:16",
+                    ),
+                )
+                imgs = getattr(img_resp, "generated_images", None) or getattr(img_resp, "images", None) or []
+                for im in imgs:
+                    b = getattr(im, "image_bytes", None) or getattr(im, "bytes", None) or None
+                    if b:
+                        return b
+            except Exception:
+                pass
+
             return None
 
         try:
@@ -379,7 +437,7 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
         if not use_llm:
             return None
         try:
-            img = types.Image.from_file(str(frame_path))
+            img = _genai_image_from_local_path(frame_path)
         except Exception:
             return None
         try:
@@ -757,7 +815,7 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
             parts: list[object] = [prompt]
             for p in prior_frame_paths[-2:]:
                 if p.exists():
-                    parts.append(types.Image.from_file(str(p)))
+                    parts.append(_genai_image_from_local_path(p))
             resp = client.models.generate_content(model=model, contents=parts)
             payload = _parse_json_object(resp.text or "")
             beat = str(payload.get("beat", "") or "").strip()
@@ -786,30 +844,14 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
         if lp is not None:
             garments_local.append(lp)
 
-    def _pick_refs_for_scene(*, face: Path | None, garments: list[Path], prev_frame: Path | None, scene_index: int) -> list[Path]:
-        """
-        Enforce anchor prioritization under implicit model limits.
-
-        Rules (as requested):
-        - Always prioritize face anchor first.
-        - Under tight limits, use the previous GENERATED frame (scene 2+) as the next-best continuity anchor because it is already "on-body".
-          Flat-lay garment references can cause Gemini to "hug" the catalog composition and produce warped/distorted results.
-        - Garment anchors are attached only if we still have capacity after face (+ prev frame).
-        """
-        max_n = max(0, int(getattr(settings, "media_max_ref_images", 3) or 3))
-        out: list[Path] = []
-        if face is not None:
-            out.append(face)
-        # Scene 2+: prefer previous on-body frame over flat-lay garments if we are capacity constrained.
-        if scene_index > 0 and prev_frame is not None and len(out) < max_n:
-            out.append(prev_frame)
-        # Garments last (up to 2) if there's still room.
-        for g in (garments or [])[:2]:
-            if len(out) >= max_n:
-                break
-            if g not in out:
-                out.append(g)
-        return out[:max_n]
+    if has_face and face_local is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Face anchor file not found on the server. Re-upload your selfie, or set DATA_DIR to the folder "
+                f"that contains this relative path: {body.face_anchor_path!r}"
+            ),
+        )
 
     for i, s in enumerate(scenes):
         total = len(scenes)
@@ -817,50 +859,30 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
         arc_phase = str(arc_entry.get("phase", "") or "beat")
         arc_hook = str(arc_entry.get("hook", "") or "")
 
-        # If we have prior generated frames, pass the last one as continuity for beat drafting.
-        prior_frame_paths: list[Path] = []
-        try:
-            if generated:
-                last_rel = (generated[-1].generated_image_path or "").strip()
-                last_local = _resolve(last_rel)
-                if last_local is not None:
-                    prior_frame_paths.append(last_local)
-        except Exception:
-            prior_frame_paths = []
-
         beat = await _gemini_scene_beat(
             scene_index=i,
             scene_total=total,
             prior=generated,
             arc_phase=arc_phase,
             arc_hook=arc_hook,
-            prior_frame_paths=prior_frame_paths,
+            prior_frame_paths=[],
         )
         s2 = s.model_copy(update={"description": beat or _offline_description(idx=i, total=total, scene=s, arc_phase=arc_phase, arc_hook=arc_hook)})
 
         img_path: str | None = None
 
-        # Reference selection under model limits:
-        # face first, then garments (up to 2), then previous generated frame if capacity allows.
-        g_rot: list[Path] = []
-        if garments_local:
-            g0 = garments_local[i % len(garments_local)]
-            g_rot.append(g0)
-            if len(garments_local) > 1:
-                g1 = garments_local[(i + 1) % len(garments_local)]
-                if g1 != g0:
-                    g_rot.append(g1)
-        prev_for_scene = prior_frame_paths[-1] if prior_frame_paths else None
-        ref_for_image = _pick_refs_for_scene(
-            face=face_local if has_face else None,
-            garments=g_rot,
-            prev_frame=prev_for_scene,
-            scene_index=i,
-        )
+        # Reference selection:
+        # The main failure mode you reported is the model "hugging" the flat-lay garment photos and outputting
+        # something that looks like the garment anchor instead of a new on-body cinematic frame.
+        #
+        # To make the generated stills reliably "new", we attach ONLY the face anchor as an image reference
+        # (identity) and express the outfit constraints via structured JSON + text (anchor analysis).
+        ref_for_image: list[Path] = [face_local] if (has_face and face_local is not None) else []
         ref_meta_paths.append([_path_for_log(p) for p in ref_for_image])
 
         if use_llm:
-            wardrobe_ctx = "\n".join(f"- {p}" for p in (body.anchor_image_paths or [])[:12])
+            # Use the structured analysis (colors/categories/material hints) instead of attaching flat-lay refs.
+            wardrobe_ctx = _analysis_block()
             subj_rule = (
                 "The only main subject is the face-anchor person.\n" if has_face else "One consistent lead subject.\n"
             )
@@ -878,7 +900,6 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
             prior_json = (
                 {
                     "previous_scene_index": i,
-                    "previous_generated_image_path": _path_for_log(prev_for_scene) if prev_for_scene is not None else None,
                     "previous_description": generated[-1].description if generated else None,
                 }
                 if i > 0
@@ -904,18 +925,94 @@ async def generate_scenes(body: PreviewReelCopyRequest) -> PreviewReelCopyRespon
                 f"{subj_rule}"
                 "Use attached images strictly as REFERENCES for identity/outfit. Never output them directly.\n"
             )
-            data = await _gemini_cinematic_still(
-                prompt=img_prompt,
-                ref_paths=ref_for_image,
-                timeout_s=42.0,
-                # We must prioritize face anchor for identity; do not force text-only here.
-                force_text_to_image=False,
-            )
-            if data:
-                img_path = _write_png_bytes(data)
+            def _mse128(a_path: Path, b_path: Path) -> float | None:
+                try:
+                    from PIL import Image  # type: ignore
+                    import numpy as np  # type: ignore
+                except Exception:
+                    return None
+                try:
+                    ia = Image.open(str(a_path)).convert("RGB").resize((128, 128))
+                    ib = Image.open(str(b_path)).convert("RGB").resize((128, 128))
+                    aa = np.asarray(ia, dtype=np.float32)
+                    bb = np.asarray(ib, dtype=np.float32)
+                    return float(np.mean((aa - bb) ** 2))
+                except Exception:
+                    return None
+
+            def _too_similar_to_garments(gen_local: Path) -> bool:
+                # If the generated still is extremely similar to any garment flat-lay, reject it and retry.
+                # Threshold at 128×128 MSE: true near-duplicates are usually very low; raised slightly to cut false rejects.
+                try:
+                    for gp in garments_local[:6]:
+                        mse = _mse128(gen_local, gp)
+                        if mse is not None and mse < 4500.0:
+                            return True
+                except Exception:
+                    return False
+                return False
+
+            # Retry loop: avoid silent fallback-to-garment behavior.
+            # If Gemini returns empty bytes OR returns something too close to a garment anchor, retry with
+            # a stricter prompt. If we still can't get a good frame, fail loudly (no garment-poster fallback).
+            max_tries = 3
+            saw_empty_image = False
+            saw_garment_like = False
+            for attempt in range(max_tries):
+                strict = attempt > 0
+                prompt2 = img_prompt
+                if strict:
+                    prompt2 = (
+                        img_prompt
+                        + "\n\nSTRICT CONSTRAINTS:\n"
+                        + "- The subject must be FULL-BODY or 3/4 body, on-location cinematic shot.\n"
+                        + "- Do NOT show a single isolated garment on a plain background.\n"
+                        + "- Do NOT show a flat-lay, product photo, catalog image, or poster-like centered clothing.\n"
+                        + "- The result must clearly look like a film frame with depth, lighting, and environment.\n"
+                    )
+                data = await _gemini_cinematic_still(
+                    prompt=prompt2,
+                    ref_paths=ref_for_image,
+                    timeout_s=150.0 if strict else 120.0,
+                    # We must prioritize face anchor for identity; do not force text-only here.
+                    force_text_to_image=False,
+                )
+                if not data:
+                    saw_empty_image = True
+                    continue
+                rel = _write_png_bytes(data)
+                local = _resolve(rel)
+                if local is None:
+                    saw_empty_image = True
+                    continue
+                if _too_similar_to_garments(local):
+                    saw_garment_like = True
+                    img_path = None
+                    continue
+                img_path = rel
+                break
 
         if img_path is None:
-            # Offline fallback: never copy the selfie; for Scene 1 fall back to a garment-based still.
+            # IMPORTANT:
+            # If we have a live LLM key but still failed, do NOT fall back to a garment-poster renderer.
+            # That fallback is exactly the failure mode the user sees (scene looks like the garment anchor).
+            if use_llm:
+                parts: list[str] = [
+                    "Could not produce a valid cinematic still for this scene.",
+                ]
+                if saw_garment_like:
+                    parts.append(
+                        "The image model kept returning frames that looked like flat-lay or catalog garment shots. "
+                        "Try a different movie idea, different wardrobe photos, or tap Generate scenes again."
+                    )
+                if saw_empty_image:
+                    parts.append(
+                        "Gemini returned no image bytes (model unavailable for this key, safety block, network timeout, or quota). "
+                        "Check API billing, try again, or shorten the movie idea text."
+                    )
+                raise HTTPException(status_code=502, detail=" ".join(parts))
+
+            # Offline fallback (no LLM): create a synthetic still so the UI always has something.
             anchor_for_offline = s2.anchor_image_path
             if not anchor_for_offline:
                 anchor_for_offline = (body.anchor_image_paths or [None])[0]
@@ -1345,7 +1442,7 @@ async def generate_scene_assets(body: GenerateSceneAssetsRequest) -> GenerateSce
                 parts: list[object] = [prompt]
                 for p in ref_for_image[:4]:
                     if p.exists():
-                        parts.append(types.Image.from_file(str(p)))
+                        parts.append(_genai_image_from_local_path(p))
                 resp = client.models.generate_content(
                     model=img_model,
                     contents=parts,
@@ -1383,7 +1480,7 @@ async def generate_scene_assets(body: GenerateSceneAssetsRequest) -> GenerateSce
     try:
         if (not use_llm) or client is None or image_path is None:
             raise RuntimeError("Skip vision description (no LLM or missing image)")
-        img2 = types.Image.from_file(str(image_path))
+        img2 = _genai_image_from_local_path(image_path)
         prompt2 = (
             "You are writing a short shot description for a fashion reel.\n"
             "Given the GENERATED frame image and the MOVIE_IDEA, write ONE paragraph that:\n"

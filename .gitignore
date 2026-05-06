@@ -8,5 +8,6 @@ __pycache__/
 generated_media/
 backend/.venv/
 backend/data/
+backend/story_engine_test_*/
 frontend/node_modules/
 frontend/dist/

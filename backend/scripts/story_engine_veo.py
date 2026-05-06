@@ -281,8 +281,8 @@ def build_veo_prompt(
     garments = "Image 2 (and Image 3 if applicable)" if has_image3 else "Image 2"
     return (
         f"{STYLE_MODIFIER} {plot_s}\n"
-        "Ensure the protagonist has the exact facial features of Image 1 and wears the garments from "
-        f"{garments}. "
+        "Keep the lead subject visually consistent with reference Image 1, with wardrobe that reflects "
+        f"the garments shown in {garments}. "
         "The camera must maintain a dynamic tracking motion following the subject."
     ).strip()
 

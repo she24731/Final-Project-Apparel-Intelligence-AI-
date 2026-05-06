@@ -619,7 +619,7 @@ async def generate_reel_preview_scenes(
                         if local.exists():
                             client = genai.Client(api_key=settings.gemini_api_key)
                             model = settings.gemini_model
-                            img = types.Image.from_file(str(local))
+                            img = types.Image.from_file(location=str(local))
                             label = f"Scene {i + 1}/{n} — Face anchor"
                             vision_prompt = (
                                 "You are writing a shot description for a short fashion reel.\n"

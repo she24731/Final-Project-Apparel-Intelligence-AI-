@@ -237,11 +237,11 @@ def build_veo_prompt(*, base_prompt: str, reference_images_count: int) -> str:
         else:
             outfit_list = ", ".join(f"image {i}" for i in range(2, n + 1))
         anchor_clause = (
-            f"The subject must have the facial features of image 1, and be wearing the outfit from {outfit_list}."
+            f"The subject should stay visually consistent with reference image 1, wearing clothing aligned with {outfit_list}."
         )
     elif n == 1:
         # No face anchor. Image 1 is the first garment/outfit anchor.
-        anchor_clause = "The subject must be wearing the outfit from image 1."
+        anchor_clause = "The subject should wear clothing aligned with reference image 1."
     else:
         anchor_clause = ""
     return (
@@ -405,7 +405,7 @@ class GeminiVeoProvider(MediaProvider):
             if not lp.exists():
                 return None
             try:
-                return types.Image.from_file(str(lp))
+                return types.Image.from_file(location=str(lp.resolve()))
             except Exception:
                 return None
 
